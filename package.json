@@ -1,0 +1,30 @@
+{
+  "name": "chatgpt-rank-tracker-backend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "pm2 start ecosystem.config.js --env production",
+    "stop": "pm2 delete ecosystem.config.js",
+    "restart": "pm2 reload ecosystem.config.js",
+    "migrate:dev": "SUPABASE_DB_URL=\"postgresql://postgres:jyDY8656bzPcCgJZ@db.jnmflukiggtttfomyupk.supabase.co:5432/postgres\" supabase db push"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@google-cloud/pubsub": "^5.1.0",
+    "@supabase/supabase-js": "^2.50.2",
+    "axios": "^1.10.0",
+    "body-parser": "^2.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.0",
+    "express": "^5.1.0",
+    "node-cron": "^4.1.1",
+    "nodemailer": "^7.0.5",
+    "nodemailer-mailgun-transport": "^2.1.5",
+    "openai": "^5.8.2",
+    "p-limit": "^6.2.0",
+    "uuid": "^11.1.0"
+  }
+}
