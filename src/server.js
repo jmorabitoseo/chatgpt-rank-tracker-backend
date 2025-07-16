@@ -60,6 +60,10 @@ app.use(cors({
 
 app.use(bodyParser.json());
 
+// test server is running with get request at root
+app.get('/', (req, res) => {
+  res.send('Server is running....');
+});
 
 
 // New endpoint to fetch full BrightData response by snapshot_id and prompt
@@ -119,12 +123,14 @@ app.post('/enqueue', async (req, res) => {
   const {
     project_id,
     user_id,
+    email,
     prompts = [],
     brandMentions = [],
     domainMentions = [],
     userCity = '',
     userCountry = '',
     openaiKey,
+    webSearch = false,
     openaiModel = process.env.DEFAULT_OPENAI_MODEL || 'gpt-4'
   } = req.body;
 
@@ -211,7 +217,8 @@ app.post('/enqueue', async (req, res) => {
         const triggerBody = batch.map(e => ({
           url: 'https://chatgpt.com/',
           prompt: e.text,
-          country: e.userCountry
+          country: e.userCountry,
+          web_search: webSearch
         }));
 
         const { data } = await axios.post(
@@ -228,6 +235,7 @@ app.post('/enqueue', async (req, res) => {
             snapshotID,
             openaiKey,
             openaiModel,
+            email,
             prompts: batch   // includes trackingId on each
           })));
 
