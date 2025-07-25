@@ -141,20 +141,51 @@ app.post('/enqueue', async (req, res) => {
   }
 
   try {
-
-    // const { data:userRec, error:userErr } =
-    // await supabase.auth.admin.getUserById(user_id)
     // 1) Validate OpenAI credentials
     const openai = createOpenAI(openaiKey);
     await validateOpenAIAccess(openai, openaiModel);
 
-    // 2) Insert & seed prompts + tracking stubs
-    const enriched = await Promise.all(prompts.map(async text => {
+    // 2) Calculate batch info
+    const size = getBatchSize(prompts.length);
+    const totalBatches = Math.ceil(prompts.length / size);
+
+    // 3) Create job_batches entry
+    const { data: jobBatch, error: jobError } = await supabase
+      .from('job_batches')
+      .insert([{
+        user_id,
+        project_id,
+        email,
+        total_prompts: prompts.length,
+        total_batches: totalBatches,
+        openai_key: openaiKey,
+        openai_model: openaiModel,
+        web_search: webSearch,
+        user_country: userCountry,
+        user_city: userCity,
+        brand_mentions: brandMentions,
+        domain_mentions: domainMentions,
+        status: 'pending'
+      }])
+      .select('id')
+      .single();
+
+    if (jobError) throw jobError;
+
+    const jobBatchId = jobBatch.id;
+
+    // 4) Prepare bulk data for prompts and tracking_results
+    const promptsData = [];
+    const trackingData = [];
+    const enriched = [];
+
+    prompts.forEach((text, index) => {
       const promptId = uuidv4();
       const trackingId = uuidv4();
+      const batchNumber = Math.floor(index / size);
 
-      // a) insert into prompts table
-      const { error: promptError } = await supabase.from('prompts').insert([{
+      // Prepare prompts data
+      promptsData.push({
         id: promptId,
         text,
         enabled: true,
@@ -165,19 +196,19 @@ app.post('/enqueue', async (req, res) => {
         user_country: userCountry,
         brand_mentions: brandMentions,
         domain_mentions: domainMentions
-      }]);
-      
-      if (promptError) throw promptError;
+      });
 
-      // b) insert stub into tracking_results
-      const { error: trackingError } = await supabase.from('tracking_results').insert([{
+      // Prepare tracking_results data
+      trackingData.push({
         id: trackingId,
         prompt_id: promptId,
-        prompt: text,            // ← store the prompt text here
+        prompt: text,
         project_id,
         user_id,
+        job_batch_id: jobBatchId,
+        batch_number: batchNumber,
         snapshot_id: null,
-        status: 'pending',       // new status column
+        status: 'pending',
         is_present: null,
         sentiment: null,
         salience: null,
@@ -188,11 +219,10 @@ app.post('/enqueue', async (req, res) => {
         timestamp: Date.now(),
         source: 'Bright Data',
         mention_count: null
-      }]);
-      
-      if (trackingError) throw trackingError;
+      });
 
-      return {
+      // Prepare enriched data for batching
+      enriched.push({
         id: promptId,
         text,
         userId: user_id,
@@ -200,52 +230,76 @@ app.post('/enqueue', async (req, res) => {
         brandMentions,
         domainMentions,
         userCountry,
-        trackingId
-      };
-    }));
+        trackingId,
+        batchNumber
+      });
+    });
 
-    // 3) Chunk into batches
-    const size = getBatchSize(enriched.length);
+    // 5) Bulk insert prompts (all at once)
+    const { error: promptsError } = await supabase
+      .from('prompts')
+      .insert(promptsData);
+    
+    if (promptsError) throw new Error(`Failed to insert prompts: ${promptsError.message}`);
+
+    // 6) Bulk insert tracking_results (all at once)
+    const { error: trackingError } = await supabase
+      .from('tracking_results')
+      .insert(trackingData);
+    
+    if (trackingError) throw new Error(`Failed to insert tracking results: ${trackingError.message}`);
+
+    console.log(`Bulk inserted ${prompts.length} prompts and tracking stubs for job ${jobBatchId}`);
+
+    // 7) Chunk into batches and queue individual Pub/Sub messages
     const batches = chunkArray(enriched, size);
+    
+    // Update job status to processing
+    await supabase
+      .from('job_batches')
+      .update({ status: 'processing' })
+      .eq('id', jobBatchId);
 
-    // 4) Trigger BrightData & publish to Pub/Sub (max 5 concurrent)
-    const { default: pLimit } = await import('p-limit');
-    const limit = pLimit(5);
-
-    const snapshotIDs = await Promise.all(
-      batches.map(batch => limit(async () => {
-        const triggerBody = batch.map(e => ({
-          url: 'https://chatgpt.com/',
-          prompt: e.text,
-          country: e.userCountry,
-          web_search: webSearch
-        }));
-
-        const { data } = await axios.post(
-          `https://api.brightdata.com/datasets/v3/trigger?dataset_id=${bright.dataset}`,
-          triggerBody,
-          { headers: { Authorization: `Bearer ${bright.key}` } }
-        );
-        const snapshotID = data.snapshot_id;
-
-        // publish message with trackingIds
+    // Queue each batch as a separate message (no waiting)
+    const batchPromises = batches.map(async (batch, batchIndex) => {
+      try {
+        // Publish message for this batch - BrightData trigger moved to worker
         await pubsub
           .topic(pubsubTopic)
           .publish(Buffer.from(JSON.stringify({
-            snapshotID,
             openaiKey,
             openaiModel,
             email,
-            prompts: batch   // includes trackingId on each
+            jobBatchId,
+            batchNumber: batchIndex,
+            totalBatches,
+            prompts: batch,
+            userCountry,
+            webSearch,
+            isNightly: false
           })));
 
-        return snapshotID;
-      }))
-    );
+        console.log(`Queued batch ${batchIndex + 1}/${totalBatches} for job ${jobBatchId}`);
+      } catch (err) {
+        console.error(`Failed to queue batch ${batchIndex}:`, err);
+        // Don't throw - let other batches continue
+      }
+    });
 
-    // 5) Respond with all batch snapshot IDs
-    res.json({ status: 'enqueued', snapshotIDs });
-    // res.json({ status: 'enqueued', userRec, userErr });
+    // Don't await the batch promises - let them run in background
+    Promise.all(batchPromises).catch(err => {
+      console.error('Some batches failed to queue:', err);
+    });
+
+    // 6) Return immediately with job info
+    res.json({ 
+      status: 'enqueued', 
+      jobBatchId,
+      totalPrompts: prompts.length,
+      totalBatches,
+      message: `Your ${prompts.length} prompts are being processed in ${totalBatches} batches. You'll receive an email when complete.`
+    });
+
   } catch (err) {
     console.error('Enqueue error:', err);
     res.status(500).json({ error: err.message });

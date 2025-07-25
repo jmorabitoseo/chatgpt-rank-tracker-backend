@@ -5,7 +5,11 @@ const OpenAI = require('openai');
 
 module.exports = {
   pubsub: new PubSub({ projectId: process.env.PUBSUB_PROJECT_ID }),
-  supabase: createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY),
+  // Use service role key for server operations to bypass RLS
+  supabase: createClient(
+    process.env.SUPABASE_URL, 
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY
+  ),
   bright: {
     key: process.env.BRIGHTDATA_KEY,
     dataset: process.env.BRIGHTDATA_DATASET_ID,

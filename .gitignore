@@ -1,3 +1,6 @@
 node_modules
 .env
 brightdata-backend-98c0e335d045.json
+test-*.js
+fix-*.js
+cleanup-*.js

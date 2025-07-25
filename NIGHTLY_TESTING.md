@@ -98,13 +98,27 @@ await testNightlyRefreshNow();
 
 ## Cron Schedule
 
-The cron job runs at 12:00 AM UTC daily:
+The cron job runs at 4:00 AM UTC daily for optimal global timezone coverage:
 ```javascript
-cron.schedule('0 0 * * *', performNightlyRefresh, {
+cron.schedule('0 4 * * *', performNightlyRefresh, {
   scheduled: true,
   timezone: "UTC"
 });
 ```
 
-In production, make sure `NIGHTLY_TESTING_MODE` is not set to `true` to ensure all users are processed. 
+**Global Timezone Impact:**
+- **PST/PDT (UTC-8/-7)**: 8:00/9:00 PM previous day (evening)
+- **EST/EDT (UTC-5/-4)**: 11:00 PM/12:00 AM previous day (late evening)
+- **London (UTC+0/+1)**: 4:00/5:00 AM (early morning)
+- **Paris/Berlin (UTC+1/+2)**: 5:00/6:00 AM (early morning)
+- **Beijing (UTC+8)**: 12:00 PM (lunch time)
+- **Tokyo (UTC+9)**: 1:00 PM (early afternoon)
+
+**Why 4:00 AM UTC is optimal:**
+- **Americas**: Runs after business hours when users have finished creating daily prompts
+- **Europe**: Runs early morning before users start checking their dashboards
+- **Asia**: Runs during lunch/early afternoon as a natural workflow break
+
+This schedule ensures users worldwide get fresh daily data when they need it most.
+
 In production, make sure `NIGHTLY_TESTING_MODE` is not set to `true` to ensure all users are processed. 

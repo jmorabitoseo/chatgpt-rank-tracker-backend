@@ -173,7 +173,8 @@ async function performNightlyRefresh() {
     // 3) Process each user's projects
     for (const [userId, userProjectList] of Object.entries(userProjects)) {
       try {
-        console.log(`Processing user ${userId} with ${userProjectList.length} projects`);
+        const totalPromptsForUser = userProjectList.reduce((sum, proj) => sum + proj.prompts.length, 0);
+        console.log(`📂 Processing user ${userId} with ${userProjectList.length} projects (${totalPromptsForUser} total prompts)`);
 
         // Get user's OpenAI key
         const { data: userSettings, error: settingsError } = await supabase
@@ -215,41 +216,41 @@ async function performNightlyRefresh() {
             const batchSize = getBatchSize(enrichedPrompts.length);
             const batches = chunkArray(enrichedPrompts, batchSize);
 
-            // 7) Process batches with concurrency limit
-            const { default: pLimit } = await import('p-limit');
-            const limit = pLimit(3); // Reduced concurrency for nightly jobs
+            // 7) Process batches - queue messages for workers (aligned with new server.js pattern)
+            const totalBatches = batches.length;
 
-            const snapshotIDs = await Promise.all(
-              batches.map(batch => limit(async () => {
-                const triggerBody = batch.map(e => ({
-                  url: 'https://chatgpt.com/',
-                  prompt: e.text,
-                  country: e.userCountry
-                }));
-
-                const { data } = await axios.post(
-                  `https://api.brightdata.com/datasets/v3/trigger?dataset_id=${bright.dataset}`,
-                  triggerBody,
-                  { headers: { Authorization: `Bearer ${bright.key}` } }
-                );
-                const snapshotID = data.snapshot_id;
-
-                // Publish message with prompt data and nightly flag
+            // Queue each batch as a separate message (no BrightData triggering here)
+            const batchPromises = batches.map(async (batch, batchIndex) => {
+              try {
+                // Publish message for this batch - BrightData trigger moved to worker
                 await pubsub
                   .topic(pubsubTopic)
                   .publish(Buffer.from(JSON.stringify({
-                    snapshotID,
                     openaiKey,
                     openaiModel,
+                    email: null, // No email for nightly jobs
+                    jobBatchId: null, // No job tracking for nightly jobs
+                    batchNumber: batchIndex,
+                    totalBatches,
                     prompts: batch,
+                    userCountry: batch[0]?.userCountry || 'US',
+                    webSearch: false, // Nightly jobs don't use web search
                     isNightly: true // Flag to skip email notifications and create tracking_results directly
                   })));
 
-                return snapshotID;
-              }))
-            );
+                console.log(`Nightly batch ${batchIndex + 1}/${totalBatches} queued for project ${project.name}`);
+              } catch (err) {
+                console.error(`Failed to queue nightly batch ${batchIndex}:`, err);
+                // Don't throw - let other batches continue
+              }
+            });
 
-            console.log(`Created ${snapshotIDs.length} batches for project ${project.name}: ${snapshotIDs.join(', ')}`);
+            // Don't await the batch promises - let them run in background
+            Promise.all(batchPromises).catch(err => {
+              console.error('Some nightly batches failed to queue:', err);
+            });
+
+            console.log(`✅ Queued ${totalBatches} nightly batches for project ${project.name} (${enrichedPrompts.length} prompts)`);
 
           } catch (projectError) {
             console.error(`Error processing project ${project.id}:`, projectError);
