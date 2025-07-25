@@ -13,11 +13,11 @@ module.exports = {
         watch: ['src'],
         ignore_watch: ['node_modules', '.git']
       },
-      // {
-      //   name: 'nightly',
-      //   script: './src/nightly.js',
-      //   watch: ['src'],
-      //   ignore_watch: ['node_modules', '.git']
-      // },
+      {
+        name: 'nightly',
+        script: './src/nightly.js',
+        watch: ['src'],
+        ignore_watch: ['node_modules', '.git']
+      },
     ],
   };
