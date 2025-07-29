@@ -2,6 +2,15 @@
 const OpenAI = require("openai");
 
 /**
+ * Normalize curly quotes to straight ones
+ */
+function normalizeQuotes(text) {
+  return text
+    .replace(/[\u2018\u2019\u201B\u0060\u00B4]/g, "'")  // Various single quotes to straight quote
+    .replace(/[\u201C\u201D\u201E]/g, '"');              // Various double quotes to straight quote
+}
+
+/**
  * Escapes special regex characters in a string
  */
 function escapeRegExp(string) {
@@ -9,20 +18,58 @@ function escapeRegExp(string) {
 }
 
 /**
- * Counts brand mentions in the response text
+ * Creates a brand pattern with proper quote normalization and escaping
+ */
+function createBrandPattern(brandName) {
+  const normalized = normalizeQuotes(brandName);
+  const escaped = escapeRegExp(normalized);
+  return new RegExp(`\\b${escaped}\\b`, "gi");
+}
+
+/**
+ * Counts brand mentions in the response text with proper special character handling
  */
 function countBrandMatches(brands, response) {
   const matches = {};
   let totalMatches = 0;
   let anyMatch = false;
 
-  if (!response || !brands || brands.length === 0) {
+  // Handle invalid response
+  if (!response || typeof response !== 'string') {
     return { totalMatches: 0, matches: {}, anyMatch: false };
   }
 
-  brands.forEach((brand) => {
-    const pattern = new RegExp(`\\b${escapeRegExp(brand)}\\b`, "gi");
-    const count = (response.match(pattern) || []).length;
+  // Handle invalid or empty brands - ensure it's an array
+  if (!brands) {
+    return { totalMatches: 0, matches: {}, anyMatch: false };
+  }
+
+  // Convert brands to array if it's not already (handle string case)
+  let brandsArray;
+  if (typeof brands === 'string') {
+    brandsArray = [brands];
+  } else if (Array.isArray(brands)) {
+    brandsArray = brands;
+  } else {
+    console.warn('countBrandMatches: brands parameter is not string or array:', typeof brands, brands);
+    return { totalMatches: 0, matches: {}, anyMatch: false };
+  }
+
+  if (brandsArray.length === 0) {
+    return { totalMatches: 0, matches: {}, anyMatch: false };
+  }
+
+  // Normalize the response text for consistent matching
+  const normalizedResponse = normalizeQuotes(response);
+
+  brandsArray.forEach((brand) => {
+    if (!brand || typeof brand !== 'string') {
+      console.warn('countBrandMatches: skipping invalid brand:', brand);
+      return;
+    }
+
+    const pattern = createBrandPattern(brand);
+    const count = (normalizedResponse.match(pattern) || []).length;
 
     if (count > 0) {
       matches[brand] = count;
@@ -34,12 +81,42 @@ function countBrandMatches(brands, response) {
   return { totalMatches, matches, anyMatch };
 }
 
+function countDomainMatches(
+  domainMentions, // Array of domain strings to search for
+  citations, // Array of citation objects with domain property
+  highlight = false// Flag to indicate if we should highlight the domain mentions
+) {
+  const matches = {};
+  let totalMatches = 0;
+  let anyMatch = false;
+
+  // Extract text from citations for processing
+  const response = citations?.map(citation => citation.domain).join(' ');
+  let highlightedText = response; // Default is the original text
+
+  domainMentions.forEach((domain) => {
+    const pattern = new RegExp(`\\b${escapeRegExp(domain)}\\b`, "gi");
+    const count = (response?.match(pattern) || []).length;
+
+    if (count > 0) {
+      matches[domain] = count;
+      totalMatches += count;
+      anyMatch = true;
+
+    } else {
+      matches[domain] = 0;
+    }
+  });
+
+  return { totalMatches, matches, anyMatch };
+}
+
 /**
  * Returns a 0–100 sentiment score for the given text & brands.
  */
 async function analyzeSentiment(response, brands, openai, model) {
   if (!brands.length || !response.trim()) return 0;
-  
+
   // Check if any brands are mentioned before making OpenAI call
   const brandMatch = countBrandMatches(brands, response);
   if (!brandMatch.anyMatch) return 0;
@@ -83,7 +160,7 @@ ${response}
  */
 async function analyzeSalience(response, brands, openai, model) {
   if (!brands.length || !response.trim()) return 0;
-  
+
   // Check if any brands are mentioned before making OpenAI call
   const brandMatch = countBrandMatches(brands, response);
   if (!brandMatch.anyMatch) return 0;
@@ -119,4 +196,4 @@ Provide only a single number between 0-100 as your rating.`;
   return Math.min(100, Math.max(0, num));
 }
 
-module.exports = { analyzeSentiment, analyzeSalience, countBrandMatches };
+module.exports = { analyzeSentiment, analyzeSalience, countBrandMatches, countDomainMatches };

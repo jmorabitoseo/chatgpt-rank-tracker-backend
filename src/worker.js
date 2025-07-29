@@ -18,7 +18,8 @@ const {
 const {
   analyzeSentiment,
   analyzeSalience,
-  countBrandMatches
+  countBrandMatches,
+  countDomainMatches
 } = require('./utils/analysis');
 
 // ───────────── SMTP via Mailgun transport ─────────────
@@ -157,17 +158,29 @@ subscription.on('message', async message => {
         processedPromptIds.add(job.trackingId);
 
         const answerText = bres.answer_text || bres.answer_text_markdown || '';
-        const match = countBrandMatches(job.brandMentions, answerText);
-
+        
+        // Ensure brandMentions is always an array
+        let brandMentions = job.brandMentions;
+        if (typeof brandMentions === 'string') {
+          // Handle case where brandMentions might be a single string
+          brandMentions = [brandMentions];
+        } else if (!Array.isArray(brandMentions)) {
+          // Handle case where brandMentions might be null, undefined, or other type
+          console.warn('Invalid brandMentions format:', typeof brandMentions, brandMentions);
+          brandMentions = [];
+        }
+        
+        const match = countBrandMatches(brandMentions, answerText);
+        const domainMatch = countDomainMatches(job.domainMentions, job.citations);
         let sentiment = 0, salience = 0;
         if (match.anyMatch) {
           sentiment = await retryWithBackoff(
-            () => analyzeSentiment(answerText, job.brandMentions, openai, openaiModel),
+            () => analyzeSentiment(answerText, brandMentions, openai, openaiModel),
             5, `Sentiment for "${job.text}"`
           );
           await delay(300);
           salience = await retryWithBackoff(
-            () => analyzeSalience(answerText, job.brandMentions, openai, openaiModel),
+            () => analyzeSalience(answerText, brandMentions, openai, openaiModel),
             5, `Salience for "${job.text}"`
           );
         }
@@ -188,6 +201,7 @@ subscription.on('message', async message => {
               status: 'fulfilled',
               timestamp: Date.now(),
               is_present: match.anyMatch,
+              is_domain_present: domainMatch.anyMatch,
               sentiment,
               salience,
               response: JSON.stringify({answer_text: answerText}),
@@ -195,7 +209,8 @@ subscription.on('message', async message => {
               domain_mentions: job.domainMentions,
               brand_name: String(job.brandMentions),
               source: 'Bright Data (Nightly)',
-              mention_count: match.totalMatches
+              mention_count: match.totalMatches,
+              domain_mention_count: domainMatch.totalMatches
             }]);
   
           if (insertErr) throw insertErr;
@@ -210,10 +225,12 @@ subscription.on('message', async message => {
               status: 'fulfilled',
               timestamp: Date.now(),
               is_present: match.anyMatch,
+              is_domain_present: domainMatch.anyMatch,
               sentiment,
               salience,
               response: JSON.stringify({answer_text: answerText}),
-              mention_count: match.totalMatches
+              mention_count: match.totalMatches,
+              domain_mention_count: domainMatch.totalMatches
             })
             .eq('id', job.trackingId);
   
