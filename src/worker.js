@@ -171,7 +171,7 @@ subscription.on('message', async message => {
         }
         
         const match = countBrandMatches(brandMentions, answerText);
-        const domainMatch = countDomainMatches(job.domainMentions, job.citations);
+        const domainMatch = countDomainMatches(job.domainMentions, bres.citations);
         let sentiment = 0, salience = 0;
         if (match.anyMatch) {
           sentiment = await retryWithBackoff(
@@ -187,7 +187,6 @@ subscription.on('message', async message => {
   
         // 4) Handle tracking_results: update stub for regular jobs, create new entry for nightly jobs
         if (isNightly) {
-          console.log("------ Inserting nightly tracking_results entry directly with real data-----: ", actualSnapshotID);
   
           // Create new tracking_results entry directly with real data
           const { error: insertErr } = await supabase
@@ -216,7 +215,6 @@ subscription.on('message', async message => {
           if (insertErr) throw insertErr;
         } else {
           // Update existing tracking_results stub (regular user-initiated jobs)
-          console.log("------ Updating existing tracking_results entry directly with real data-----: ", actualSnapshotID);
   
           const { error: updateErr } = await supabase
             .from('tracking_results')
