@@ -2,12 +2,16 @@
 const OpenAI = require("openai");
 
 /**
- * Normalize curly quotes to straight ones
+ * Normalize text for better brand matching by handling quotes and accents
  */
-function normalizeQuotes(text) {
+function normalizeText(text) {
   return text
+    // Normalize quotes first
     .replace(/[\u2018\u2019\u201B\u0060\u00B4]/g, "'")  // Various single quotes to straight quote
-    .replace(/[\u201C\u201D\u201E]/g, '"');              // Various double quotes to straight quote
+    .replace(/[\u201C\u201D\u201E]/g, '"')              // Various double quotes to straight quote
+    // Normalize accented characters to their base forms
+    .normalize('NFD')                                   // Decompose accented characters
+    .replace(/[\u0300-\u036f]/g, '');                  // Remove accent marks
 }
 
 /**
@@ -18,10 +22,10 @@ function escapeRegExp(string) {
 }
 
 /**
- * Creates a brand pattern with proper quote normalization and escaping
+ * Creates a brand pattern with proper text normalization and escaping
  */
 function createBrandPattern(brandName) {
-  const normalized = normalizeQuotes(brandName);
+  const normalized = normalizeText(brandName);
   const escaped = escapeRegExp(normalized);
   return new RegExp(`\\b${escaped}\\b`, "gi");
 }
@@ -60,7 +64,7 @@ function countBrandMatches(brands, response) {
   }
 
   // Normalize the response text for consistent matching
-  const normalizedResponse = normalizeQuotes(response);
+  const normalizedResponse = normalizeText(response);
 
   brandsArray.forEach((brand) => {
     if (!brand || typeof brand !== 'string') {
