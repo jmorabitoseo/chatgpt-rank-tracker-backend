@@ -54,7 +54,7 @@ async function retryWithBackoff(fn, maxRetries = 5, label = '') {
       const wait = err.status === 429
         ? Math.min(2000 * 2 ** i, 30000)
         : Math.min(1000 * 2 ** i, 10000);
-      console.warn(`${label} attempt ${i + 1} failed, retrying in ${wait}ms…`);
+      // console.warn(`${label} attempt ${i + 1} failed, retrying in ${wait}ms…`);
       await delay(wait);
     }
   }
@@ -81,7 +81,7 @@ subscription.on('message', async message => {
 
   let actualSnapshotID = snapshotID;
 
-  console.log(`------ Starting queue process for batch ${batchNumber + 1}/${totalBatches}, job: ${jobBatchId}, snapshot: ${actualSnapshotID || 'will trigger'}`);
+  // console.log(`------ Starting queue process for batch ${batchNumber + 1}/${totalBatches}, job: ${jobBatchId}, snapshot: ${actualSnapshotID || 'will trigger'}`);
   
   // Initialize OpenAI client
   const openai = createOpenAI(openaiKey);
@@ -89,7 +89,7 @@ subscription.on('message', async message => {
   try {
     // 1) If no snapshotID provided, trigger BrightData first
     if (!actualSnapshotID) {
-      console.log(`Triggering BrightData for batch ${batchNumber + 1}/${totalBatches}...`);
+      // console.log(`Triggering BrightData for batch ${batchNumber + 1}/${totalBatches}...`);
       
       const triggerBody = prompts.map(prompt => ({
         url: 'https://chatgpt.com/',
@@ -117,16 +117,16 @@ subscription.on('message', async message => {
         { headers: { Authorization: `Bearer ${bright.key}` } }
       );
       results = data;
-      console.log("------ Fetching results for queue process from Bright Data-----: ", actualSnapshotID, results, Array.isArray(results));
+      // console.log("------ Fetching results for queue process from Bright Data-----: ", actualSnapshotID, results, Array.isArray(results));
       
       // Handle non-array responses (status objects)
       if (!Array.isArray(results)) {
         if (results.status === 'failed') {
           throw new Error(`Bright Data snapshot failed: ${results.message || 'Unknown error'}`);
         } else if (results.status === 'running' || results.status === 'building' || results.status === 'pending') {
-          console.log(`Snapshot ${actualSnapshotID} still running, will retry in 30s...`);
+          // console.log(`Snapshot ${actualSnapshotID} still running, will retry in 30s...`);
         } else {
-          console.warn(`Unexpected status from Bright Data: ${results.status}`);
+          // console.warn(`Unexpected status from Bright Data: ${results.status}`);
         }
       }
     } while (!Array.isArray(results));
@@ -150,7 +150,7 @@ subscription.on('message', async message => {
           (p.trackingId && p.trackingId === bres.prompt_id) || p.text === bres.prompt
         );
         if (!job) {
-          console.warn('No matching job for response:', bres);
+          // console.warn('No matching job for response:', bres);
           continue;
         }
 
@@ -166,7 +166,7 @@ subscription.on('message', async message => {
           brandMentions = [brandMentions];
         } else if (!Array.isArray(brandMentions)) {
           // Handle case where brandMentions might be null, undefined, or other type
-          console.warn('Invalid brandMentions format:', typeof brandMentions, brandMentions);
+          // console.warn('Invalid brandMentions format:', typeof brandMentions, brandMentions);
           brandMentions = [];
         }
         
@@ -239,7 +239,7 @@ subscription.on('message', async message => {
     // 4) Handle any unprocessed prompts (mark them as failed)
     const unprocessedPrompts = prompts.filter(p => !processedPromptIds.has(p.trackingId));
     if (unprocessedPrompts.length > 0) {
-      console.warn(`${unprocessedPrompts.length} prompts were not processed by BrightData for snapshot ${actualSnapshotID}`);
+      // console.warn(`${unprocessedPrompts.length} prompts were not processed by BrightData for snapshot ${actualSnapshotID}`);
       
       for (const unprocessedJob of unprocessedPrompts) {
         try {
@@ -318,13 +318,13 @@ subscription.on('message', async message => {
                 completed_at: new Date().toISOString()
               })
               .eq('id', jobBatchId);
-            console.log(`Job ${jobBatchId} completed with status: ${finalStatus}`);
+            // console.log(`Job ${jobBatchId} completed with status: ${finalStatus}`);
           }
         } else {
-          console.log(`Skipping completed_batches increment for job ${jobBatchId} - already at total batches (likely a retry)`);
+          // console.log(`Skipping completed_batches increment for job ${jobBatchId} - already at total batches (likely a retry)`);
         }
       } catch (err) {
-        console.error('Error updating job progress:', err);
+        // console.error('Error updating job progress:', err);
       }
     }
 
@@ -343,7 +343,7 @@ subscription.on('message', async message => {
         if (existingEmail) {
           // Use existence of tracking_results with this snapshot_id as deduplication
           // Only send email if this is the first time we're processing this snapshot
-          console.log(`Sending SUCCESS email for batch ${batchNumber + 1}/${totalBatches}, snapshot: ${actualSnapshotID}`);
+          // console.log(`Sending SUCCESS email for batch ${batchNumber + 1}/${totalBatches}, snapshot: ${actualSnapshotID}`);
           
           const templateVars = {
             appUrl: process.env.APP_URL,
@@ -362,18 +362,18 @@ subscription.on('message', async message => {
             'h:X-Mailgun-Variables': JSON.stringify(templateVars)
           });
 
-          console.log(`SUCCESS email sent for batch ${batchNumber + 1}/${totalBatches}, snapshot: ${actualSnapshotID}`);
+          // console.log(`SUCCESS email sent for batch ${batchNumber + 1}/${totalBatches}, snapshot: ${actualSnapshotID}`);
         }
       } catch (emailErr) {
-        console.error('Error sending success email notification:', emailErr);
+        // console.error('Error sending success email notification:', emailErr);
       }
     }
 
     // 7) Acknowledge message  
     message.ack();
-    console.log(`Processed batch ${batchNumber + 1}/${totalBatches} for job ${jobBatchId}, snapshot ${actualSnapshotID}`);
+    // console.log(`Processed batch ${batchNumber + 1}/${totalBatches} for job ${jobBatchId}, snapshot ${actualSnapshotID}`);
   } catch (err) {
-    console.error('Worker error:', err);
+    // console.error('Worker error:', err);
 
     // Determine the failure reason for user-friendly messaging
     let failureReason = 'Unknown error occurred during processing';
@@ -393,7 +393,7 @@ subscription.on('message', async message => {
         // Mark tracking results as failed with specific error message
         // Always update by job_batch_id and batch_number for the current batch
         if (jobBatchId && typeof batchNumber !== 'undefined') {
-          console.log(`Marking batch ${batchNumber + 1}/${totalBatches} as failed for job ${jobBatchId}`);
+          // console.log(`Marking batch ${batchNumber + 1}/${totalBatches} as failed for job ${jobBatchId}`);
           await supabase
             .from('tracking_results')
             .update({ 
@@ -404,7 +404,7 @@ subscription.on('message', async message => {
             .eq('batch_number', batchNumber);
         } else if (actualSnapshotID) {
           // Fallback: update by snapshot_id if job info not available
-          console.log(`Marking records with snapshot ${actualSnapshotID} as failed`);
+          // console.log(`Marking records with snapshot ${actualSnapshotID} as failed`);
           await supabase
             .from('tracking_results')
             .update({ 
@@ -414,7 +414,7 @@ subscription.on('message', async message => {
             .eq('snapshot_id', actualSnapshotID);
         } else if (jobBatchId) {
           // Last resort: update all pending records for this job batch
-          console.log(`Marking all pending records for job ${jobBatchId} as failed`);
+          // console.log(`Marking all pending records for job ${jobBatchId} as failed`);
           await supabase
             .from('tracking_results')
             .update({ 
@@ -437,7 +437,7 @@ subscription.on('message', async message => {
           // Only increment if this batch hasn't pushed us over the total
           const currentTotal = (existingJob?.failed_batches || 0) + (existingJob?.completed_batches || 0);
           if (currentTotal < (existingJob?.total_batches || 0)) {
-            console.log(`Incrementing failed_batches for job ${jobBatchId} (retry-safe)`);
+            // console.log(`Incrementing failed_batches for job ${jobBatchId} (retry-safe)`);
             await supabase.rpc('increment_failed_batches', { job_id: jobBatchId });
             
             // Update final job status when all batches complete (for tracking only)
@@ -452,17 +452,17 @@ subscription.on('message', async message => {
                   error_message: failureReason
                 })
                 .eq('id', jobBatchId);
-              console.log(`Job ${jobBatchId} failed with status: ${finalStatus}`);
+              // console.log(`Job ${jobBatchId} failed with status: ${finalStatus}`);
             }
           } else {
-            console.log(`Skipping failed_batches increment for job ${jobBatchId} - already at total batches (likely a retry)`);
+            // console.log(`Skipping failed_batches increment for job ${jobBatchId} - already at total batches (likely a retry)`);
           }
         }
 
         // Send FAILURE email for THIS batch (simplified - no complex deduplication needed)
         if (!isNightly && jobBatchId && typeof batchNumber !== 'undefined') {
           try {
-            console.log(`Sending FAILURE email for batch ${batchNumber + 1}/${totalBatches}, snapshot: ${actualSnapshotID || 'N/A'}`);
+            // console.log(`Sending FAILURE email for batch ${batchNumber + 1}/${totalBatches}, snapshot: ${actualSnapshotID || 'N/A'}`);
             
             const templateVars = {
               appUrl: process.env.APP_URL,
@@ -481,16 +481,16 @@ subscription.on('message', async message => {
               'h:X-Mailgun-Variables': JSON.stringify(templateVars)
             });
 
-            console.log(`FAILURE email sent for batch ${batchNumber + 1}/${totalBatches}, snapshot: ${actualSnapshotID || 'N/A'}`);
+            // console.log(`FAILURE email sent for batch ${batchNumber + 1}/${totalBatches}, snapshot: ${actualSnapshotID || 'N/A'}`);
           } catch (emailErr) {
-            console.error('Error sending failure email notification:', emailErr);
+            // console.error('Error sending failure email notification:', emailErr);
           }
         } else {
-          console.log(`Skipping FAILURE email - missing required identifiers: jobBatchId=${!!jobBatchId}, batchNumber=${batchNumber}`);
+          // console.log(`Skipping FAILURE email - missing required identifiers: jobBatchId=${!!jobBatchId}, batchNumber=${batchNumber}`);
         }
 
       } catch (updateErr) {
-        console.error('Error updating failure status:', updateErr);
+        // console.error('Error updating failure status:', updateErr);
       }
     }
 

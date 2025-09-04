@@ -68,7 +68,7 @@ let isRefreshRunning = false;
 
 async function performNightlyRefresh() {
   if (isRefreshRunning) {
-    console.log('⚠️  Nightly refresh already running, skipping duplicate call...');
+    // console.log('⚠️  Nightly refresh already running, skipping duplicate call...');
     return;
   }
   
@@ -82,13 +82,13 @@ async function performNightlyRefresh() {
   
   if (isTestingMode) {
     if (!TEST_USER_ID || !TEST_PROJECT_ID) {
-      console.error('❌ Testing mode enabled but NIGHTLY_TEST_USER_ID or NIGHTLY_TEST_PROJECT_ID not provided');
+      // console.error('❌ Testing mode enabled but NIGHTLY_TEST_USER_ID or NIGHTLY_TEST_PROJECT_ID not provided');
       isRefreshRunning = false;
       return;
     }
-    console.log(`🧪 Starting nightly refresh (TESTING MODE - User: ${TEST_USER_ID}, Project: ${TEST_PROJECT_ID}) at ${startTime}...`);
+    // console.log(`🧪 Starting nightly refresh (TESTING MODE - User: ${TEST_USER_ID}, Project: ${TEST_PROJECT_ID}) at ${startTime}...`);
   } else {
-    console.log(`🚀 Starting nightly refresh (PRODUCTION MODE - All Users) at ${startTime}...`);
+    // console.log(`🚀 Starting nightly refresh (PRODUCTION MODE - All Users) at ${startTime}...`);
   }
   
   try {
@@ -120,11 +120,11 @@ async function performNightlyRefresh() {
       projectsError = result.error;
       
       if (!projects || projects.length === 0) {
-        console.log(`No enabled prompts found for test user ${TEST_USER_ID} in project ${TEST_PROJECT_ID}.`);
+        // console.log(`No enabled prompts found for test user ${TEST_USER_ID} in project ${TEST_PROJECT_ID}.`);
         return;
       }
       
-      console.log(`🧪 TESTING MODE: Found ${projects.length} project(s) with enabled prompts for user ${TEST_USER_ID}`);
+      // console.log(`🧪 TESTING MODE: Found ${projects.length} project(s) with enabled prompts for user ${TEST_USER_ID}`);
     } else {
       // 1) Fetch ALL users' projects with enabled prompts
       const result = await supabase
@@ -149,12 +149,12 @@ async function performNightlyRefresh() {
       projectsError = result.error;
       
       if (!projects || projects.length === 0) {
-        console.log('No enabled prompts found across all users.');
+        // console.log('No enabled prompts found across all users.');
         return;
       }
       
       const uniqueUsers = [...new Set(projects.map(p => p.user_id))];
-      console.log(`🚀 PRODUCTION MODE: Found ${projects.length} project(s) with enabled prompts across ${uniqueUsers.length} users`);
+      // console.log(`🚀 PRODUCTION MODE: Found ${projects.length} project(s) with enabled prompts across ${uniqueUsers.length} users`);
     }
 
     if (projectsError) {
@@ -174,7 +174,7 @@ async function performNightlyRefresh() {
     for (const [userId, userProjectList] of Object.entries(userProjects)) {
       try {
         const totalPromptsForUser = userProjectList.reduce((sum, proj) => sum + proj.prompts.length, 0);
-        console.log(`📂 Processing user ${userId} with ${userProjectList.length} projects (${totalPromptsForUser} total prompts)`);
+        // console.log(`📂 Processing user ${userId} with ${userProjectList.length} projects (${totalPromptsForUser} total prompts)`);
 
         // Get user's OpenAI key
         const { data: userSettings, error: settingsError } = await supabase
@@ -184,7 +184,7 @@ async function performNightlyRefresh() {
           .single();
 
         if (settingsError || !userSettings?.openai_key) {
-          console.warn(`Skipping user ${userId}: No OpenAI key found`);
+          // console.warn(`Skipping user ${userId}: No OpenAI key found`);
           continue;
         }
 
@@ -198,7 +198,7 @@ async function performNightlyRefresh() {
         // 4) Process each project for this user
         for (const project of userProjectList) {
           try {
-            console.log(`Processing project ${project.name} (${project.id}) for user ${userId}`);
+            // console.log(`Processing project ${project.name} (${project.id}) for user ${userId}`);
 
             // 5) Process each prompt in the project (NO STUBS - just prepare data for worker)
             const enrichedPrompts = project.prompts.map(prompt => ({
@@ -238,41 +238,41 @@ async function performNightlyRefresh() {
                     isNightly: true // Flag to skip email notifications and create tracking_results directly
                   })));
 
-                console.log(`Nightly batch ${batchIndex + 1}/${totalBatches} queued for project ${project.name}`);
+                // console.log(`Nightly batch ${batchIndex + 1}/${totalBatches} queued for project ${project.name}`);
               } catch (err) {
-                console.error(`Failed to queue nightly batch ${batchIndex}:`, err);
+                // console.error(`Failed to queue nightly batch ${batchIndex}:`, err);
                 // Don't throw - let other batches continue
               }
             });
 
             // Don't await the batch promises - let them run in background
             Promise.all(batchPromises).catch(err => {
-              console.error('Some nightly batches failed to queue:', err);
+              // console.error('Some nightly batches failed to queue:', err);
             });
 
-            console.log(`✅ Queued ${totalBatches} nightly batches for project ${project.name} (${enrichedPrompts.length} prompts)`);
+            // console.log(`✅ Queued ${totalBatches} nightly batches for project ${project.name} (${enrichedPrompts.length} prompts)`);
 
           } catch (projectError) {
-            console.error(`Error processing project ${project.id}:`, projectError);
+            // console.error(`Error processing project ${project.id}:`, projectError);
             // Continue with next project
           }
         }
 
       } catch (userError) {
-        console.error(`Error processing user ${userId}:`, userError);
+        // console.error(`Error processing user ${userId}:`, userError);
         // Continue with next user
       }
     }
 
     const endTime = new Date().toISOString();
-    console.log(`✅ Nightly refresh enqueued successfully at ${endTime}`);
+    // console.log(`✅ Nightly refresh enqueued successfully at ${endTime}`);
 
   } catch (error) {
     const errorTime = new Date().toISOString();
-    console.error(`❌ Nightly refresh failed at ${errorTime}:`, error);
+    // console.error(`❌ Nightly refresh failed at ${errorTime}:`, error);
   } finally {
     isRefreshRunning = false;
-    console.log('🔓 Nightly refresh lock released');
+    // console.log('🔓 Nightly refresh lock released');
   }
 }
 
@@ -298,22 +298,22 @@ try {
   });
 
   if (isTestingMode) {
-    console.log(`🧪 TESTING MODE: Nightly refresh cron job scheduled with custom interval: "${cronSchedule}" (UTC)`);
-    console.log(`   Target User: ${process.env.NIGHTLY_TEST_USER_ID}`);
-    console.log(`   Target Project: ${process.env.NIGHTLY_TEST_PROJECT_ID}`);
+    // console.log(`🧪 TESTING MODE: Nightly refresh cron job scheduled with custom interval: "${cronSchedule}" (UTC)`);
+    // console.log(`   Target User: ${process.env.NIGHTLY_TEST_USER_ID}`);
+    // console.log(`   Target Project: ${process.env.NIGHTLY_TEST_PROJECT_ID}`);
     
     // Show next few run times for testing schedules
     if (cronSchedule.startsWith('*/')) {
-      console.log('   ⏰ This will run frequently for testing purposes');
+      // console.log('   ⏰ This will run frequently for testing purposes');
     }
   } else {
-    console.log(`🚀 PRODUCTION MODE: Nightly refresh cron job scheduled for: "${cronSchedule}" (UTC)`);
+    // console.log(`🚀 PRODUCTION MODE: Nightly refresh cron job scheduled for: "${cronSchedule}" (UTC)`);
     if (cronSchedule !== '0 0 * * *') {
-      console.log('   ⚠️  Using custom schedule in production mode');
+      // console.log('   ⚠️  Using custom schedule in production mode');
     }
   }
 } catch (error) {
-  console.error('❌ Failed to schedule nightly refresh:', error.message);
+  // console.error('❌ Failed to schedule nightly refresh:', error.message);
   process.exit(1);
 }
 
@@ -321,11 +321,11 @@ try {
 // Make sure to set environment variables for testing:
 // NIGHTLY_TESTING_MODE=true NIGHTLY_TEST_USER_ID=<user_id> NIGHTLY_TEST_PROJECT_ID=<project_id>
 async function testNightlyRefreshNow() {
-  console.log('\n🧪 TESTING NIGHTLY REFRESH IMMEDIATELY...\n');
-  console.log('Environment variables:');
-  console.log(`- NIGHTLY_TESTING_MODE: ${process.env.NIGHTLY_TESTING_MODE}`);
-  console.log(`- NIGHTLY_TEST_USER_ID: ${process.env.NIGHTLY_TEST_USER_ID}`);
-  console.log(`- NIGHTLY_TEST_PROJECT_ID: ${process.env.NIGHTLY_TEST_PROJECT_ID}\n`);
+  // console.log('\n🧪 TESTING NIGHTLY REFRESH IMMEDIATELY...\n');
+  // console.log('Environment variables:');
+  // console.log(`- NIGHTLY_TESTING_MODE: ${process.env.NIGHTLY_TESTING_MODE}`);
+  // console.log(`- NIGHTLY_TEST_USER_ID: ${process.env.NIGHTLY_TEST_USER_ID}`);
+  // console.log(`- NIGHTLY_TEST_PROJECT_ID: ${process.env.NIGHTLY_TEST_PROJECT_ID}\n`);
   await performNightlyRefresh();
 }
 

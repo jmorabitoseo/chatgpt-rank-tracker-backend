@@ -104,7 +104,7 @@ app.get('/snapshot-data/:snapshotId', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Snapshot data fetch error:', err);
+    // console.error('Snapshot data fetch error:', err);
     
     if (err.response?.status === 404) {
       return res.status(404).json({ 
@@ -249,7 +249,7 @@ app.post('/enqueue', async (req, res) => {
     
     if (trackingError) throw new Error(`Failed to insert tracking results: ${trackingError.message}`);
 
-    console.log(`Bulk inserted ${prompts.length} prompts and tracking stubs for job ${jobBatchId}`);
+    // console.log(`Bulk inserted ${prompts.length} prompts and tracking stubs for job ${jobBatchId}`);
 
     // 7) Chunk into batches and queue individual Pub/Sub messages
     const batches = chunkArray(enriched, size);
@@ -279,16 +279,16 @@ app.post('/enqueue', async (req, res) => {
             isNightly: false
           })));
 
-        console.log(`Queued batch ${batchIndex + 1}/${totalBatches} for job ${jobBatchId}`);
+        // console.log(`Queued batch ${batchIndex + 1}/${totalBatches} for job ${jobBatchId}`);
       } catch (err) {
-        console.error(`Failed to queue batch ${batchIndex}:`, err);
+        // console.error(`Failed to queue batch ${batchIndex}:`, err);
         // Don't throw - let other batches continue
       }
     });
 
     // Don't await the batch promises - let them run in background
     Promise.all(batchPromises).catch(err => {
-      console.error('Some batches failed to queue:', err);
+      // console.error('Some batches failed to queue:', err);
     });
 
     // 6) Return immediately with job info
@@ -301,7 +301,7 @@ app.post('/enqueue', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Enqueue error:', err);
+    // console.error('Enqueue error:', err);
     res.status(500).json({ error: err.message });
   }
 });
