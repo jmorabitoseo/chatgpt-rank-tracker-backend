@@ -117,16 +117,16 @@ subscription.on('message', async message => {
         { headers: { Authorization: `Bearer ${bright.key}` } }
       );
       results = data;
-      // console.log("------ Fetching results for queue process from Bright Data-----: ", actualSnapshotID, results, Array.isArray(results));
+      console.log("------ Fetching results for queue process from Bright Data-----: ", actualSnapshotID);
       
       // Handle non-array responses (status objects)
       if (!Array.isArray(results)) {
         if (results.status === 'failed') {
           throw new Error(`Bright Data snapshot failed: ${results.message || 'Unknown error'}`);
         } else if (results.status === 'running' || results.status === 'building' || results.status === 'pending') {
-          // console.log(`Snapshot ${actualSnapshotID} still running, will retry in 30s...`);
+          console.log(`Snapshot ${actualSnapshotID} still running, will retry in 30s...`);
         } else {
-          // console.warn(`Unexpected status from Bright Data: ${results.status}`);
+          console.warn(`Unexpected status from Bright Data: ${results.status}`);
         }
       }
     } while (!Array.isArray(results));

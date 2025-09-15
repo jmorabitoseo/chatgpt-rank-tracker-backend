@@ -131,7 +131,8 @@ app.post('/enqueue', async (req, res) => {
     userCountry = '',
     openaiKey,
     webSearch = false,
-    openaiModel = process.env.DEFAULT_OPENAI_MODEL || 'gpt-4'
+    openaiModel = process.env.DEFAULT_OPENAI_MODEL || 'gpt-4',
+    tags = [] // New: Accept tags array
   } = req.body;
 
   if (!project_id || !user_id || !prompts.length || !openaiKey) {
@@ -145,11 +146,55 @@ app.post('/enqueue', async (req, res) => {
     const openai = createOpenAI(openaiKey);
     await validateOpenAIAccess(openai, openaiModel);
 
-    // 2) Calculate batch info
+    // 2) Process tags - create/find tags in database
+    let tagIds = [];
+    if (tags.length > 0) {
+      for (const tagName of tags) {
+        if (!tagName.trim()) continue; // Skip empty tags
+        
+        // Try to find existing tag (case-insensitive)
+        let { data: existingTag, error: findError } = await supabase
+          .from('tags')
+          .select('id')
+          .eq('project_id', project_id)
+          .eq('user_id', user_id)
+          .ilike('name', tagName.trim())
+          .single();
+
+        if (findError && findError.code !== 'PGRST116') {
+          throw new Error(`Error finding tag "${tagName}": ${findError.message}`);
+        }
+
+        if (existingTag) {
+          // Tag exists, use its ID
+          tagIds.push(existingTag.id);
+        } else {
+          // Create new tag
+          const { data: newTag, error: createError } = await supabase
+            .from('tags')
+            .insert([{
+              name: tagName.trim(),
+              project_id,
+              user_id,
+              color: '#3B82F6' // Default blue color
+            }])
+            .select('id')
+            .single();
+
+          if (createError) {
+            throw new Error(`Error creating tag "${tagName}": ${createError.message}`);
+          }
+
+          tagIds.push(newTag.id);
+        }
+      }
+    }
+
+    // 3) Calculate batch info
     const size = getBatchSize(prompts.length);
     const totalBatches = Math.ceil(prompts.length / size);
 
-    // 3) Create job_batches entry
+    // 4) Create job_batches entry
     const { data: jobBatch, error: jobError } = await supabase
       .from('job_batches')
       .insert([{
@@ -165,6 +210,7 @@ app.post('/enqueue', async (req, res) => {
         user_city: userCity,
         brand_mentions: brandMentions,
         domain_mentions: domainMentions,
+        tags: tags, // Store tag names for batch reference
         status: 'pending'
       }])
       .select('id')
@@ -174,7 +220,7 @@ app.post('/enqueue', async (req, res) => {
 
     const jobBatchId = jobBatch.id;
 
-    // 4) Prepare bulk data for prompts and tracking_results
+    // 5) Prepare bulk data for prompts and tracking_results
     const promptsData = [];
     const trackingData = [];
     const enriched = [];
@@ -235,23 +281,51 @@ app.post('/enqueue', async (req, res) => {
       });
     });
 
-    // 5) Bulk insert prompts (all at once)
+    // 6) Bulk insert prompts (all at once)
     const { error: promptsError } = await supabase
       .from('prompts')
       .insert(promptsData);
     
     if (promptsError) throw new Error(`Failed to insert prompts: ${promptsError.message}`);
 
-    // 6) Bulk insert tracking_results (all at once)
+    // 7) Bulk insert tracking_results (all at once)
     const { error: trackingError } = await supabase
       .from('tracking_results')
       .insert(trackingData);
     
     if (trackingError) throw new Error(`Failed to insert tracking results: ${trackingError.message}`);
 
-    // console.log(`Bulk inserted ${prompts.length} prompts and tracking stubs for job ${jobBatchId}`);
+    // 8) Associate tags with prompts if tags were provided
+    if (tagIds.length > 0 && promptsData.length > 0) {
+      const promptTagsData = [];
+      
+      // Create associations for all prompts with all tags
+      promptsData.forEach(prompt => {
+        tagIds.forEach(tagId => {
+          promptTagsData.push({
+            prompt_id: prompt.id,
+            tag_id: tagId
+          });
+        });
+      });
 
-    // 7) Chunk into batches and queue individual Pub/Sub messages
+      // Bulk insert prompt-tag associations with conflict handling
+      const { error: promptTagsError } = await supabase
+        .from('prompt_tags')
+        .upsert(promptTagsData, { 
+          onConflict: 'prompt_id,tag_id',
+          ignoreDuplicates: true 
+        });
+      
+      if (promptTagsError) {
+        console.error('Failed to associate tags with prompts:', promptTagsError);
+        // Don't throw error - tags are optional, continue processing
+      }
+    }
+
+    console.log(`Bulk inserted ${prompts.length} prompts and tracking stubs for job ${jobBatchId}`);
+
+    // 9) Chunk into batches and queue individual Pub/Sub messages
     const batches = chunkArray(enriched, size);
     
     // Update job status to processing
@@ -291,13 +365,13 @@ app.post('/enqueue', async (req, res) => {
       // console.error('Some batches failed to queue:', err);
     });
 
-    // 6) Return immediately with job info
+    // 10) Return immediately with job info
     res.json({ 
       status: 'enqueued', 
       jobBatchId,
       totalPrompts: prompts.length,
       totalBatches,
-      message: `Your ${prompts.length} prompts are being processed in ${totalBatches} batches. You'll receive an email when complete.`
+      message: `Your ${prompts.length} prompts${tags.length > 0 ? ` with ${tags.length} tag${tags.length > 1 ? 's' : ''}` : ''} are being processed in ${totalBatches} batches. You'll receive an email when complete.`
     });
 
   } catch (err) {
