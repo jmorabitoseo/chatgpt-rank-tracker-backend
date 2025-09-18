@@ -22,6 +22,10 @@ const {
   countDomainMatches
 } = require('./utils/analysis');
 
+const {
+  getBatchPromptAIVolume
+} = require('./utils/dataForSeoService');
+
 // ───────────── SMTP via Mailgun transport ─────────────
 const transporter = nodemailer.createTransport(
   mgTransport({
@@ -142,7 +146,27 @@ subscription.on('message', async message => {
       console.warn(`BrightData returned ${results.length} results but expected ${expectedPromptCount} prompts for snapshot ${actualSnapshotID}`);
     }
 
-        // 3) Process each result sequentially and track which prompts were processed
+        // 3) Fetch AI volume data for all prompts in this batch (before processing individual results)
+    let aiVolumeDataMap = new Map();
+    try {
+      console.log(`Fetching AI volume data for ${prompts.length} prompts...`);
+      const promptTexts = prompts.map(p => p.text);
+      const aiVolumeResults = await getBatchPromptAIVolume(promptTexts, userCountry === 'US' ? 2840 : 2840); // Default to US for now
+      
+      // Map AI volume results back to prompts
+      prompts.forEach((prompt, index) => {
+        if (aiVolumeResults[index]) {
+          aiVolumeDataMap.set(prompt.trackingId, aiVolumeResults[index]);
+        }
+      });
+      
+      console.log(`AI volume data fetched for ${aiVolumeDataMap.size} out of ${prompts.length} prompts`);
+    } catch (aiVolumeError) {
+      console.warn('Failed to fetch AI volume data, continuing without it:', aiVolumeError.message);
+      // Continue processing without AI volume data
+    }
+
+    // 4) Process each result sequentially and track which prompts were processed
     const processedPromptIds = new Set();
     
     for (let bres of results) {
@@ -184,52 +208,74 @@ subscription.on('message', async message => {
             5, `Salience for "${job.text}"`
           );
         }
+
+        // Get AI volume data for this prompt
+        const aiVolumeData = aiVolumeDataMap.get(job.trackingId);
   
         // 4) Handle tracking_results: update stub for regular jobs, create new entry for nightly jobs
         if (isNightly) {
   
           // Create new tracking_results entry directly with real data
+          const insertData = {
+            prompt_id: job.id,
+            prompt: job.text,
+            project_id: job.projectId,
+            user_id: job.userId,
+            snapshot_id: actualSnapshotID,
+            status: 'fulfilled',
+            timestamp: Date.now(),
+            is_present: match.anyMatch,
+            is_domain_present: domainMatch.anyMatch,
+            sentiment,
+            salience,
+            response: JSON.stringify({answer_text: answerText}),
+            brand_mentions: job.brandMentions,
+            domain_mentions: job.domainMentions,
+            brand_name: String(job.brandMentions),
+            source: 'Bright Data (Nightly)',
+            mention_count: match.totalMatches,
+            domain_mention_count: domainMatch.totalMatches
+          };
+
+          // Add AI volume data if available
+          if (aiVolumeData) {
+            insertData.ai_search_volume = aiVolumeData.current_volume;
+            insertData.ai_monthly_trends = aiVolumeData.monthly_trends;
+            insertData.ai_volume_fetched_at = new Date().toISOString();
+            insertData.ai_volume_location_code = aiVolumeData.location_code || 2840;
+          }
+
           const { error: insertErr } = await supabase
             .from('tracking_results')
-            .insert([{
-              prompt_id: job.id,
-              prompt: job.text,
-              project_id: job.projectId,
-              user_id: job.userId,
-              snapshot_id: actualSnapshotID,
-              status: 'fulfilled',
-              timestamp: Date.now(),
-              is_present: match.anyMatch,
-              is_domain_present: domainMatch.anyMatch,
-              sentiment,
-              salience,
-              response: JSON.stringify({answer_text: answerText}),
-              brand_mentions: job.brandMentions,
-              domain_mentions: job.domainMentions,
-              brand_name: String(job.brandMentions),
-              source: 'Bright Data (Nightly)',
-              mention_count: match.totalMatches,
-              domain_mention_count: domainMatch.totalMatches
-            }]);
+            .insert([insertData]);
   
           if (insertErr) throw insertErr;
         } else {
           // Update existing tracking_results stub (regular user-initiated jobs)
+          const updateData = {
+            snapshot_id: actualSnapshotID,
+            status: 'fulfilled',
+            timestamp: Date.now(),
+            is_present: match.anyMatch,
+            is_domain_present: domainMatch.anyMatch,
+            sentiment,
+            salience,
+            response: JSON.stringify({answer_text: answerText}),
+            mention_count: match.totalMatches,
+            domain_mention_count: domainMatch.totalMatches
+          };
+
+          // Add AI volume data if available
+          if (aiVolumeData) {
+            updateData.ai_search_volume = aiVolumeData.current_volume;
+            updateData.ai_monthly_trends = aiVolumeData.monthly_trends;
+            updateData.ai_volume_fetched_at = new Date().toISOString();
+            updateData.ai_volume_location_code = aiVolumeData.location_code || 2840;
+          }
   
           const { error: updateErr } = await supabase
             .from('tracking_results')
-            .update({
-              snapshot_id: actualSnapshotID,
-              status: 'fulfilled',
-              timestamp: Date.now(),
-              is_present: match.anyMatch,
-              is_domain_present: domainMatch.anyMatch,
-              sentiment,
-              salience,
-              response: JSON.stringify({answer_text: answerText}),
-              mention_count: match.totalMatches,
-              domain_mention_count: domainMatch.totalMatches
-            })
+            .update(updateData)
             .eq('id', job.trackingId);
   
           if (updateErr) throw updateErr;
