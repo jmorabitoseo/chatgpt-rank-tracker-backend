@@ -1,4 +1,3 @@
-// src/utils/dataForSeoService.js
 const axios = require('axios');
 
 const BASE_URL = 'https://api.dataforseo.com/v3';
@@ -170,44 +169,47 @@ function processAIVolumeData(volumeData) {
     return null;
   }
 
-  // Aggregate data from all keywords (in case multiple keywords were analyzed)
+  // Sum current volumes and aggregate monthly volumes per month
   let totalCurrentVolume = 0;
-  let allMonthlyData = [];
-  let processedKeywords = [];
+  const monthlyMap = new Map();
+  const processedKeywords = [];
 
-  volumeData.items.forEach(item => {
-    if (item.ai_search_volume && item.ai_search_volume > 0) {
-      totalCurrentVolume += item.ai_search_volume;
-      processedKeywords.push(item.keyword);
-      
-      if (item.ai_monthly_searches && Array.isArray(item.ai_monthly_searches)) {
-        allMonthlyData.push(...item.ai_monthly_searches);
+  for (const item of volumeData.items) {
+    // Process ALL items, not just those with volume > 0
+    totalCurrentVolume += item.ai_search_volume || 0;
+    processedKeywords.push(item.keyword);
+    if (Array.isArray(item.ai_monthly_searches)) {
+      for (const { year, month, ai_search_volume } of item.ai_monthly_searches) {
+        const key = `${year}-${month}`;
+        const existing = monthlyMap.get(key) || { year, month, ai_search_volume: 0 };
+        existing.ai_search_volume += ai_search_volume || 0;
+        monthlyMap.set(key, existing);
       }
     }
-  });
-
-  // If no volume data found, return null
-  if (totalCurrentVolume === 0) {
-    return null;
   }
 
-  // Sort monthly data by date (newest first)
-  allMonthlyData.sort((a, b) => {
-    const dateA = new Date(a.year, a.month - 1);
-    const dateB = new Date(b.year, b.month - 1);
-    return dateB.getTime() - dateA.getTime();
-  });
+  // Don't return null for zero volume - this means we got a successful response with zero data
+  // if (totalCurrentVolume === 0) {
+  //   return null;
+  // }
+
+  // Build and sort unique monthly data (newest first)
+  const allMonthlyData = Array.from(monthlyMap.values())
+    .sort((a, b) => new Date(b.year, b.month - 1) - new Date(a.year, a.month - 1))
+    .slice(0, 12);
 
   // Calculate metrics
-  const volumes = allMonthlyData.map(item => item.ai_search_volume);
-  const averageVolume = volumes.length > 0 ? Math.round(volumes.reduce((a, b) => a + b, 0) / volumes.length) : 0;
-  const peakVolume = volumes.length > 0 ? Math.max(...volumes) : 0;
+  const volumes = allMonthlyData.map(i => i.ai_search_volume);
+  const averageVolume = volumes.length
+    ? Math.round(volumes.reduce((a, b) => a + b, 0) / volumes.length)
+    : 0;
+  const peakVolume = volumes.length ? Math.max(...volumes) : 0;
 
   return {
     current_volume: totalCurrentVolume,
     average_volume: averageVolume,
     peak_volume: peakVolume,
-    monthly_trends: allMonthlyData.slice(0, 12), // Keep last 12 months
+    monthly_trends: allMonthlyData,
     data_points: allMonthlyData.length,
     keywords: processedKeywords,
     location_code: volumeData.location_code,
@@ -223,13 +225,15 @@ function processAIVolumeData(volumeData) {
  */
 async function getPromptAIVolume(prompt, locationCode = 2840) {
   try {
-    // Extract keywords from prompt
-    const keywords = extractKeywordsFromPrompt(prompt);
+    // Extract keywords from prompt UNCOMMENT TO USE KEYWORD EXTRACTION
+    // const keywords = extractKeywordsFromPrompt(prompt);
     
-    if (keywords.length === 0) {
-      console.warn('No keywords extracted from prompt:', prompt);
-      return null;
-    }
+    // if (keywords.length === 0) {
+    //   console.warn('No keywords extracted from prompt:', prompt);
+    //   return null;
+    // }
+    // Use full prompt as keyword (lowercase for API consistency)
+    const keywords = [prompt.toLowerCase()];
 
     // Fetch volume data
     const volumeResponse = await fetchAIKeywordVolume(keywords, locationCode);
@@ -264,9 +268,14 @@ async function getBatchPromptAIVolume(prompts, locationCode = 2840) {
     const promptKeywordMap = new Map();
 
     prompts.forEach((prompt, index) => {
-      const keywords = extractKeywordsFromPrompt(prompt);
+      // UNCOMMENT TO USE KEYWORD EXTRACTION
+      // const keywords = extractKeywordsFromPrompt(prompt);
+      // Use full prompt as keyword (lowercase for API consistency)
+      const keywords = [prompt.toLowerCase()];
       promptKeywordMap.set(index, keywords);
-      allKeywords.push(...keywords);
+      // UNCOMMENT TO USE KEYWORD EXTRACTION
+      // allKeywords.push(...keywords); 
+      allKeywords.push(prompt);
     });
 
     // Remove duplicates and limit total keywords
@@ -284,11 +293,11 @@ async function getBatchPromptAIVolume(prompts, locationCode = 2840) {
       return prompts.map(() => null);
     }
 
-    // Create keyword volume lookup
+    // Create keyword volume lookup (case-insensitive)
     const keywordVolumeMap = new Map();
     if (volumeResponse.data.items) {
       volumeResponse.data.items.forEach(item => {
-        keywordVolumeMap.set(item.keyword, item);
+        keywordVolumeMap.set(item.keyword.toLowerCase(), item);
       });
     }
 
@@ -296,14 +305,14 @@ async function getBatchPromptAIVolume(prompts, locationCode = 2840) {
     const results = prompts.map((prompt, index) => {
       const promptKeywords = promptKeywordMap.get(index) || [];
       
-      // Find matching volume data for this prompt's keywords
+      // Find matching volume data for this prompt's keywords (case-insensitive)
       const matchingItems = promptKeywords
-        .map(keyword => keywordVolumeMap.get(keyword))
-        .filter(item => item && item.ai_search_volume > 0);
+        .map(keyword => keywordVolumeMap.get(keyword.toLowerCase()))
+        .filter(item => item !== undefined); // Include items even if ai_search_volume is 0
 
-      if (matchingItems.length === 0) {
-        return null;
-      }
+      // if (matchingItems.length === 0) {
+      //   return null;
+      // }
 
       // Create synthetic volume data for this prompt
       const syntheticVolumeData = {
@@ -330,4 +339,3 @@ module.exports = {
   getPromptAIVolume,
   getBatchPromptAIVolume
 };
-

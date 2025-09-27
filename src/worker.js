@@ -22,6 +22,8 @@ const {
   countDomainMatches
 } = require('./utils/analysis');
 
+const { EnhancedAnalyzer } = require('./utils/EnhancedAnalyzer');
+
 const {
   getBatchPromptAIVolume
 } = require('./utils/dataForSeoService');
@@ -152,7 +154,7 @@ subscription.on('message', async message => {
       console.log(`Fetching AI volume data for ${prompts.length} prompts...`);
       const promptTexts = prompts.map(p => p.text);
       const aiVolumeResults = await getBatchPromptAIVolume(promptTexts, userCountry === 'US' ? 2840 : 2840); // Default to US for now
-      
+      console.log("----- AI VOL: -------", aiVolumeResults)
       // Map AI volume results back to prompts
       prompts.forEach((prompt, index) => {
         if (aiVolumeResults[index]) {
@@ -209,6 +211,14 @@ subscription.on('message', async message => {
           );
         }
 
+        const { answer_html, response_raw, answer_section_html, ...brightDataFilterObj } = bres;
+        const serpAnalyzer = new EnhancedAnalyzer();
+        const analyzerResult = serpAnalyzer.analyzeResponse(brightDataFilterObj);
+
+        // Pull out the summary
+        const { summary } = analyzerResult;
+        
+
         // Get AI volume data for this prompt
         const aiVolumeData = aiVolumeDataMap.get(job.trackingId);
   
@@ -234,7 +244,10 @@ subscription.on('message', async message => {
             brand_name: String(job.brandMentions),
             source: 'Bright Data (Nightly)',
             mention_count: match.totalMatches,
-            domain_mention_count: domainMatch.totalMatches
+            domain_mention_count: domainMatch.totalMatches,
+            lcp: summary.lcp,
+            actionability: summary.actionability,
+            serp: summary.serp
           };
 
           // Add AI volume data if available
@@ -262,7 +275,10 @@ subscription.on('message', async message => {
             salience,
             response: JSON.stringify({answer_text: answerText}),
             mention_count: match.totalMatches,
-            domain_mention_count: domainMatch.totalMatches
+            domain_mention_count: domainMatch.totalMatches,
+            lcp: summary.lcp,
+            actionability: summary.actionability,
+            serp: summary.serp
           };
 
           // Add AI volume data if available
