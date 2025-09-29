@@ -135,8 +135,18 @@ class EnhancedAnalyzer {
       // Clamp between 0 and 100
       lcp = Math.max(0, Math.min(100, lcp));
 
+      // Calculate score distribution
+      const distribution = {
+        domainScore: domainCount * 8,
+        freshnessBonus: fresh ? 10 : 0,
+        multipleTypesBonus: uniqueItemTypes >= 2 ? 10 : 0,
+        navigationBonus: itemTypes.includes('chat_gpt_navigation_list') ? 6 : 0,
+        total: lcp
+      };
+      
       return {
         score: lcp,
+        distribution: distribution,
         distinctDomains: distinctDomains.size,
         itemTypes: itemTypes,
         sources: sources.length,
@@ -254,8 +264,19 @@ class EnhancedAnalyzer {
       // Clamp between 0 and 100
       actionability = Math.max(0, Math.min(100, actionability));
 
+      // Calculate score distribution
+      const distribution = {
+       tableBonus: itemTypes.includes('chat_gpt_table') ? 30 : 0,
+       productBonus: itemTypes.includes('chat_gpt_products') ? 20 : 0,
+       localBusinessBonus: itemTypes.includes('chat_gpt_local_businesses') ? 20 : 0,
+       imageBonus: itemTypes.includes('chat_gpt_images') ? 10 : 0,
+       navigationBonus: itemTypes.includes('chat_gpt_navigation_list') ? 10 : 0,
+       stalenessBonus: stale ? 10 : 0,
+       total: actionability
+      };
       return {
         score: actionability,
+        distribution: distribution,
         itemTypes: itemTypes,
         sources: sources.length,
         bonusBreakdown: bonusDetails.join(', ') || 'No bonuses applied',
@@ -355,6 +376,222 @@ class EnhancedAnalyzer {
     if (score >= 60) return { rating: 'Moderately Actionable', color: '🟡' };
     if (score >= 40) return { rating: 'Somewhat Actionable', color: '🟠' };
     return { rating: 'Low Actionability', color: '🔴' };
+  }
+
+  // Calculate Intent Classification (informational, transactional, navigational)
+  calculateIntentClassification(responseData, provider) {
+    try {
+      let scores = {
+        informational: 0,
+        commercial: 0,
+        transactional: 0,
+        local: 0,
+        navigational: 0
+      };
+
+      let itemTypes = [];
+      let content = '';
+      let sources = [];
+
+      if (provider === 'brightdata') {
+        itemTypes = this.detectItemTypesFromBrightData(responseData);
+        content = responseData.answer_text_markdown || '';
+        if (responseData.citations?.length > 0) {
+          responseData.citations.forEach(citation => {
+            sources.push({
+              url: citation.url,
+              title: citation.title
+            });
+          });
+        }
+      } else if (provider === 'dataforseo') {
+        const result = responseData.tasks?.[0]?.result?.[0];
+        if (result) {
+          itemTypes = result.item_types || [];
+          content = result.text || '';
+          if (result.sources?.length > 0) {
+            result.sources.forEach(source => {
+              sources.push({
+                url: source.url,
+                title: source.title
+              });
+            });
+          }
+        }
+      }
+
+      // Commercial signals (product-focused, comparison, reviews)
+      if (itemTypes.includes('chat_gpt_products')) {
+        scores.commercial += 45;
+      }
+      if (itemTypes.includes('chat_gpt_table') && this.hasCommercialTableContent(content)) {
+        scores.commercial += 25;
+      }
+
+      // Check for commercial keywords in content
+      const commercialKeywords = [
+        'compare', 'review', 'rating', 'best', 'top', 'price', 'cost', 'features',
+        'vs', 'versus', 'pros', 'cons', 'recommendation', 'brand', 'model'
+      ];
+      const commercialMatches = this.countKeywordMatches(content, commercialKeywords);
+      scores.commercial += Math.min(commercialMatches * 3, 25);
+
+      // Local signals (location-based, business listings)
+      if (itemTypes.includes('chat_gpt_local_businesses')) {
+        scores.local += 50;
+      }
+
+      // Check for local keywords in content
+      const localKeywords = [
+        'near me', 'nearby', 'local', 'address', 'location', 'directions', 'hours',
+        'map', 'restaurant', 'store', 'business', 'service area', 'city', 'town'
+      ];
+      const localMatches = this.countKeywordMatches(content, localKeywords);
+      scores.local += Math.min(localMatches * 4, 30);
+
+      // Transactional signals (direct purchase intent)
+      if (itemTypes.includes('chat_gpt_products') && this.hasTransactionalContent(content)) {
+        scores.transactional += 35;
+      }
+      if (itemTypes.includes('chat_gpt_local_businesses') && this.hasBookingContent(content)) {
+        scores.transactional += 30;
+      }
+
+      // Check for transactional keywords in content
+      const transactionalKeywords = [
+        'buy', 'purchase', 'order', 'booking', 'reservation', 'hire', 'contact',
+        'call', 'quote', 'estimate', 'appointment', 'schedule', 'book now'
+      ];
+      const transactionalMatches = this.countKeywordMatches(content, transactionalKeywords);
+      scores.transactional += Math.min(transactionalMatches * 3, 25);
+
+      // Navigational signals
+      if (itemTypes.includes('chat_gpt_navigation_list')) {
+        scores.navigational += 35;
+      }
+      if (sources.length > 5) {
+        scores.navigational += 20;
+      }
+
+      // Check for navigational keywords
+      const navigationalKeywords = [
+        'website', 'homepage', 'official site', 'main page', 'portal', 'directory',
+        'login', 'sign in', 'dashboard', 'menu', 'navigation', 'sitemap'
+      ];
+      const navigationalMatches = this.countKeywordMatches(content, navigationalKeywords);
+      scores.navigational += Math.min(navigationalMatches * 4, 25);
+
+      // Informational signals (default baseline)
+      scores.informational += 20; // Base score for having content
+
+      if (itemTypes.includes('chat_gpt_text')) {
+        scores.informational += 25;
+      }
+      if (itemTypes.includes('chat_gpt_images')) {
+        scores.informational += 15;
+      }
+      if (itemTypes.includes('chat_gpt_table') && !this.hasCommercialTableContent(content)) {
+        scores.informational += 20;
+      }
+
+      // Check for informational keywords
+      const informationalKeywords = [
+        'what', 'why', 'how', 'when', 'where', 'definition', 'meaning', 'explain',
+        'guide', 'tutorial', 'learn', 'understand', 'compare', 'difference', 'overview'
+      ];
+      const informationalMatches = this.countKeywordMatches(content, informationalKeywords);
+      scores.informational += Math.min(informationalMatches * 2, 20);
+
+      // Determine primary intent (highest score)
+      const maxScore = Math.max(
+        scores.informational, 
+        scores.commercial, 
+        scores.transactional, 
+        scores.local, 
+        scores.navigational
+      );
+      let primaryIntent = 'informational'; // default
+
+      if (scores.commercial === maxScore) {
+        primaryIntent = 'commercial';
+      } else if (scores.transactional === maxScore) {
+        primaryIntent = 'transactional';
+      } else if (scores.local === maxScore) {
+        primaryIntent = 'local';
+      } else if (scores.navigational === maxScore) {
+        primaryIntent = 'navigational';
+      }
+
+      // Calculate confidence (difference between top two scores)
+      const sortedScores = Object.values(scores).sort((a, b) => b - a);
+      const confidence = sortedScores[0] > 0 ? 
+        Math.min(((sortedScores[0] - sortedScores[1]) / sortedScores[0]) * 100, 100) : 0;
+
+      return {
+        primaryIntent,
+        confidence: Math.round(confidence),
+        scores: scores,
+        itemTypes: itemTypes,
+        reasoning: this.generateIntentReasoning(scores, itemTypes, primaryIntent)
+      };
+    } catch (error) {
+      return {
+        primaryIntent: 'informational',
+        confidence: 0,
+        scores: { informational: 0, commercial: 0, transactional: 0, local: 0, navigational: 0 },
+        itemTypes: [],
+        reasoning: 'Error analyzing intent',
+        error: error.message
+      };
+    }
+  }
+
+  // Helper: Check if table content is commercial
+  hasCommercialTableContent(content) {
+    const commercialIndicators = ['price', 'cost', '$', 'buy', 'purchase', 'rating', 'review', 'compare'];
+    return commercialIndicators.some(indicator => content.toLowerCase().includes(indicator));
+  }
+
+  // Helper: Check if content has transactional intent
+  hasTransactionalContent(content) {
+    const transactionalIndicators = ['buy now', 'add to cart', 'purchase', 'order now', 'shop now', 'checkout'];
+    return transactionalIndicators.some(indicator => content.toLowerCase().includes(indicator));
+  }
+
+  // Helper: Check if content has booking/appointment intent
+  hasBookingContent(content) {
+    const bookingIndicators = ['book now', 'schedule', 'appointment', 'reservation', 'book appointment', 'call now'];
+    return bookingIndicators.some(indicator => content.toLowerCase().includes(indicator));
+  }
+
+  // Helper: Count keyword matches in content
+  countKeywordMatches(content, keywords) {
+    if (!content) return 0;
+    const lowerContent = content.toLowerCase();
+    return keywords.filter(keyword => lowerContent.includes(keyword.toLowerCase())).length;
+  }
+
+  // Helper: Generate intent reasoning
+  generateIntentReasoning(scores, itemTypes, primaryIntent) {
+    const reasons = [];
+
+    if (primaryIntent === 'commercial') {
+      if (itemTypes.includes('chat_gpt_products')) reasons.push('Product listings present');
+      if (scores.commercial > 40) reasons.push('Strong commercial/comparison signals');
+    } else if (primaryIntent === 'local') {
+      if (itemTypes.includes('chat_gpt_local_businesses')) reasons.push('Local business listings');
+      if (scores.local > 30) reasons.push('Strong local search signals');
+    } else if (primaryIntent === 'transactional') {
+      if (scores.transactional > 30) reasons.push('Direct purchase/booking intent');
+    } else if (primaryIntent === 'navigational') {
+      if (itemTypes.includes('chat_gpt_navigation_list')) reasons.push('Navigation list structure');
+      if (scores.navigational > 40) reasons.push('Multiple navigation signals');
+    } else {
+      if (itemTypes.includes('chat_gpt_text')) reasons.push('Primarily text-based content');
+      if (scores.informational > 40) reasons.push('Educational/explanatory content');
+    }
+
+    return reasons.join(', ') || `Classified as ${primaryIntent} based on content analysis`;
   }
 
   // Helper: Identify commerce domains
@@ -603,6 +840,7 @@ class EnhancedAnalyzer {
       const actionability = this.calculateActionabilityScore(responseData, provider);
       const features = this.detectSERPFeatures(responseData, provider);
       const featureDisplay = this.generateFeatureDisplay();
+      const intentClassification = this.calculateIntentClassification(responseData, provider);
 
       return {
         provider,
@@ -622,6 +860,7 @@ class EnhancedAnalyzer {
             // Backward compatibility
             breakdown: actionability.bonusBreakdown
           },
+          intentClassification: intentClassification,
           features: {
             detected: features,
             display: featureDisplay,
@@ -631,6 +870,7 @@ class EnhancedAnalyzer {
         summary: {
           lcp: lcp.score,
           actionability: actionability.score,
+          intentClassification: intentClassification.primaryIntent,
           serp: Object.entries(features)
             .filter(([_, feature]) => feature.detected)
             .reduce((acc, [name, feature]) => {

@@ -101,7 +101,8 @@ subscription.on('message', async message => {
         url: 'https://chatgpt.com/',
         prompt: prompt.text,
         country: userCountry,
-        web_search: webSearch
+        web_search: webSearch,
+        // additional_prompt: `${webSearch ? 'Please search the web for current information about: ' + prompt.text : ''}`
       }));
 
       const { data } = await axios.post(
@@ -245,6 +246,8 @@ subscription.on('message', async message => {
             source: 'Bright Data (Nightly)',
             mention_count: match.totalMatches,
             domain_mention_count: domainMatch.totalMatches,
+            web_search: webSearch,
+            intent_classification: summary.intentClassification,
             lcp: summary.lcp,
             actionability: summary.actionability,
             serp: summary.serp
@@ -276,6 +279,8 @@ subscription.on('message', async message => {
             response: JSON.stringify({answer_text: answerText}),
             mention_count: match.totalMatches,
             domain_mention_count: domainMatch.totalMatches,
+            web_search: webSearch,
+            intent_classification: summary.intentClassification,
             lcp: summary.lcp,
             actionability: summary.actionability,
             serp: summary.serp
