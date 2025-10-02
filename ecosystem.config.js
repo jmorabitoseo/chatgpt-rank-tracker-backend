@@ -15,7 +15,7 @@ module.exports = {
       },
       {
         name: "dataforseo-worker",
-        script: "./src/dataForSEOWorker.js",
+        script: "./src/dataForSeoWorker.js",
         watch: ["src"],
         ignore_watch: ["node_modules", ".git"],
       },
