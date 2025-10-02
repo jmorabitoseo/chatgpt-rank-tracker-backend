@@ -22,5 +22,7 @@ module.exports = {
   },
   pubsubTopic: process.env.PUBSUB_TOPIC,
   pubsubSubscription: process.env.PUBSUB_SUBSCRIPTION,
+  dataForSEOTopic: process.env.DATAFORSEO_TOPIC,
+  dataForSEOSubscription: process.env.DATAFORSEO_SUBSCRIPTION,  
   createOpenAI: (apiKey) => new OpenAI({ apiKey })
 };

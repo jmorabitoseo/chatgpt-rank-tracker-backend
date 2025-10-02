@@ -261,6 +261,7 @@ class EnhancedAnalyzer {
         bonusDetails.push('Stale content opportunity (+10)');
       }
 
+      console.log('========== ACTIONABILITY: =========', actionability, itemTypes);
       // Clamp between 0 and 100
       actionability = Math.max(0, Math.min(100, actionability));
 

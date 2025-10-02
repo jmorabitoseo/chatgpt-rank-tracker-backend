@@ -82,8 +82,16 @@ subscription.on('message', async message => {
     batchNumber = 0,
     totalBatches = 1,
     userCountry = 'US',
-    webSearch = false
+    webSearch = false,
+    service
   } = JSON.parse(message.data.toString());
+
+  // Only handle brightdata messages
+  if (service && service.toLowerCase() !== 'brightdata') {
+    console.log('Skipping non-BrightData message on BrightData worker.');
+    message.ack();
+    return;
+  }
 
   let actualSnapshotID = snapshotID;
 
