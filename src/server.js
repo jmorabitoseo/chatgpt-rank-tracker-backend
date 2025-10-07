@@ -24,6 +24,7 @@ const {
 
 // routes
 const dataForSEO = require("./routes/dataForSEO");
+const analytics = require("./routes/analytics");
 const selectHealthyService = require("./utils/brightDataUtils");
 /** Quick OpenAI key/model sanity check */
 async function validateOpenAIAccess(openai, model) {
@@ -574,5 +575,8 @@ app.post("/enqueue", async (req, res) => {
 
 // data for SEO test routes
 app.use("/api/dataforseo", dataForSEO);
+// analytics
+app.use("/api/analytics", analytics);
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Enqueue API listening on port ${PORT}`));
