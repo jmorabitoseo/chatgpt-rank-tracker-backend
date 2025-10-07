@@ -10,7 +10,7 @@ const nodemailer = require("nodemailer");
 const mgTransport = require("nodemailer-mailgun-transport");
 const { sanitizeText } = require("../utils/textSanitizer");
 const { retryWithBackoff } = require("../utils/apiHelpers");
-const {EnhancedAnalyzer} = require("../utils/EnhancedAnalyzer");
+const { EnhancedAnalyzer } = require("../utils/EnhancedAnalyzer");
 const router = express.Router();
 
 // ───────────── SMTP via Mailgun transport ─────────────
@@ -152,7 +152,10 @@ function extractWebSearchFlag(task) {
     }
     return false; // Default to false if not specified
   } catch (error) {
-    console.warn("[DataForSEO] Failed to extract web search flag:", error.message);
+    console.warn(
+      "[DataForSEO] Failed to extract web search flag:",
+      error.message
+    );
     return false;
   }
 }
@@ -398,7 +401,9 @@ async function createNightlyTrackingResult(
   domainMatch,
   sentiment,
   salience,
-  aiVolumeData
+  aiVolumeData,
+  summary,
+  webSearch
 ) {
   try {
     const insertData = {
@@ -631,7 +636,7 @@ router.post("/callback", async (req, res) => {
 
       // Pull out the summary
       const { summary } = analyzerResult;
-      
+
       // Fetch AI volume data
       const promptText = isNightly ? promptData.prompt : trackingResult.prompt;
       const aiVolumeData = await fetchAIVolumeData(promptText, taskId);
@@ -648,7 +653,9 @@ router.post("/callback", async (req, res) => {
           domainMatch,
           sentiment,
           salience,
-          aiVolumeData
+          aiVolumeData,
+          summary,
+          webSearch
         );
       } else {
         // Update existing tracking result for regular job
