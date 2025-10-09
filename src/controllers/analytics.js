@@ -311,9 +311,11 @@ const getUserAnalytics = async (req, res) => {
     const serpFeatures = calculateSerpFeatures(currentResults);
     const mostCitedPages = calculateMostCitedPages(currentResults);
     const mostCitedWebsites = calculateMostCitedWebsites(currentResults);
+    console.log(`[getUserAnalytics] projectId: ${projectId}, currentResults count: ${currentResults.length}`);
     const topPerformingKeywords = getTopPerformingKeywords(
       currentResults,
-      allPrompts
+      allPrompts,
+      projectId
     );
     const aiInsights = generateAIInsights(
       kpiMetrics,
@@ -802,11 +804,28 @@ function generateAIInsights(
 }
 
 /**
- * Get Top Performing Keywords (Top 10 by sentiment and volume)
+ * Get Top Performing Keywords (Top 5 by sentiment and volume)
  */
-function getTopPerformingKeywords(results, allPrompts) {
-  return results
-    .filter(r => r.sentiment && r.ai_search_volume !== null)
+function getTopPerformingKeywords(results, allPrompts, projectId) {
+  // Create a map of prompt_id to prompt data for quick lookup
+  const promptMap = new Map(allPrompts.map((p) => [p.id, p]));
+
+  // Filter results to only include those from the current project if projectId is specified
+  const filteredResults = projectId 
+    ? results.filter(r => r.project_id === projectId)
+    : results;
+
+  console.log(`[getTopPerformingKeywords] projectId: ${projectId}, total results: ${results.length}, filtered results: ${filteredResults.length}`);
+
+  return filteredResults
+    .filter(r => {
+      // Must have valid sentiment (not null and not 0) OR valid search volume (not null and > 0)
+      const hasValidSentiment = r.sentiment !== null && r.sentiment !== 0;
+      const hasValidSearchVolume = r.ai_search_volume !== null && r.ai_search_volume > 0;
+      
+      // Include only if at least one of sentiment or search volume is meaningful
+      return hasValidSentiment || hasValidSearchVolume;
+    })
     .map((r) => {
       const trends = r.ai_monthly_trends;
       let trend = "Unknown";
@@ -819,21 +838,90 @@ function getTopPerformingKeywords(results, allPrompts) {
         else trend = "Stable";
       }
 
+      // Get prompt data for additional context
+      const promptData = promptMap.get(r.prompt_id);
+
       return {
+        // Core keyword data
         keyword: r.prompt || "Unknown",
         search_volume: r.ai_search_volume || 0,
         sentiment_score: r.sentiment || 0,
         trend: trend,
+        
+        // Additional dynamic data for complete tracking result
+        id: r.id,
+        prompt_id: r.prompt_id,
+        project_id: r.project_id,
+        user_id: r.user_id,
+        timestamp: r.timestamp,
+        
+        // Brand and domain presence
+        is_present: r.is_present,
+        is_domain_present: r.is_domain_present,
+        mention_count: r.mention_count || 0,
+        domain_mention_count: r.domain_mention_count || 0,
+        
+        // Analysis data
+        salience: r.salience || 0,
+        lcp: r.lcp || 0,
+        actionability: r.actionability || 0,
+        web_search: r.web_search || false,
+        intent_classification: r.intent_classification || 'informational',
+        
+        // Response and mentions
+        response: r.response || '',
+        brand_mentions: r.brand_mentions || [],
+        domain_mentions: r.domain_mentions || [],
+        
+        // SERP features
+        serp: r.serp,
+        serp_features: r.serp_features || [],
+        
+        // Status and metadata
+        status: r.status || 'fulfilled',
+        source: r.source || 'analytics',
+        
+        // Snapshot and HTML content fields
+        snapshot_id: r.snapshot_id,
+        html_content: r.html_content,
+        html_content_fetched_at: r.html_content_fetched_at,
+        
+        // AI volume trends
+        ai_monthly_trends: r.ai_monthly_trends || [],
+        ai_volume_fetched_at: r.ai_volume_fetched_at,
+        ai_volume_location_code: r.ai_volume_location_code,
+        
+        // Additional tracking fields
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        error_message: r.error_message,
+        retry_count: r.retry_count,
+        
+        // Prompt metadata
+        prompt_enabled: promptData ? promptData.enabled : true,
+        prompt_created_at: promptData ? promptData.created_at : null,
       };
     })
     .sort((a, b) => {
-      // First sort by sentiment
+      // First, prioritize keywords with both sentiment and volume > 0
+      const aHasBoth = (a.sentiment_score > 0) && (a.search_volume > 0);
+      const bHasBoth = (b.sentiment_score > 0) && (b.search_volume > 0);
+      
+      if (aHasBoth && !bHasBoth) return -1;
+      if (!aHasBoth && bHasBoth) return 1;
+      
+      // If both have the same "completeness", sort by sentiment score (higher is better)
       const sentimentDiff = b.sentiment_score - a.sentiment_score;
       if (sentimentDiff !== 0) return sentimentDiff;
-      // Then by volume
-      return b.search_volume - a.search_volume;
+      
+      // Then by search volume (higher is better)
+      const volumeDiff = b.search_volume - a.search_volume;
+      if (volumeDiff !== 0) return volumeDiff;
+      
+      // Finally by salience (higher is better)
+      return (b.salience || 0) - (a.salience || 0);
     })
-    .slice(0, 5);
+    .slice(0, 5); // Return top 5 keywords
 }
 
 /**

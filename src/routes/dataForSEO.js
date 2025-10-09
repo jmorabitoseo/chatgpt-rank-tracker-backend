@@ -151,7 +151,7 @@ function detectActualWebSearch(dataForSeoResponse) {
   try {
     const task = dataForSeoResponse.tasks?.[0];
     // Check if user requested a forced web search; treated as actual retrieval
-    const forceRequested = Boolean(task?.data?.force_web_search);
+    // const forceRequested = Boolean(task?.data?.force_web_search);
     const result = task?.result?.[0];
     if (!result && !forceRequested) {
       return false;
@@ -549,7 +549,7 @@ router.post("/callback", async (req, res) => {
     const openaiKey = await fetchUserOpenAIKey(userId);
     const userCountry = extractUserCountry(task);
     const actualWebSearchOccurred = detectActualWebSearch(dataForSeoResponse);
-    console.log("ACtual WEB SEARCH:-----", promptId, actualWebSearchOccurred)
+
     // For nightly jobs, we need to get prompt data differently since there's no existing tracking_result
     let trackingResult = null;
     let promptData = null;
