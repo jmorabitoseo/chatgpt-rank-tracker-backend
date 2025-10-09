@@ -82,9 +82,15 @@ subscription.on('message', async message => {
     batchNumber = 0,
     totalBatches = 1,
     userCountry = 'US',
-    webSearch = false,
+    webSearch = false, // User's REQUESTED web search (from checkbox)
     service
   } = JSON.parse(message.data.toString());
+  
+  // NOTE: webSearch parameter is the user's INTENT to force web search.
+  // The actual web_search field stored in DB is detected from response data:
+  // - BrightData: web_search_triggered field or citations present
+  // - DataForSEO: sources/search_results arrays present
+  // This ensures we track ACTUAL web retrieval, not just user preference.
 
   // Only handle brightdata messages
   if (service && service.toLowerCase() !== 'brightdata') {
@@ -205,6 +211,14 @@ subscription.on('message', async message => {
           brandMentions = [];
         }
         
+        // Detect if web search actually occurred (not just what user requested)
+        // BrightData provides web_search_triggered field, also check for citations
+        // This ensures we track ACTUAL web retrieval, not just the checkbox setting
+        const actualWebSearchOccurred = Boolean(
+          bres.web_search_triggered || 
+          (bres.citations && bres.citations.length > 0)
+        );
+        
         const match = countBrandMatches(brandMentions, answerText);
         const domainMatch = countDomainMatches(job.domainMentions, bres.citations);
         let sentiment = 0, salience = 0;
@@ -254,7 +268,7 @@ subscription.on('message', async message => {
             source: 'Bright Data (Nightly)',
             mention_count: match.totalMatches,
             domain_mention_count: domainMatch.totalMatches,
-            web_search: webSearch,
+            web_search: actualWebSearchOccurred,
             intent_classification: summary.intentClassification,
             lcp: summary.lcp,
             actionability: summary.actionability,
@@ -287,7 +301,7 @@ subscription.on('message', async message => {
             response: JSON.stringify({answer_text: answerText}),
             mention_count: match.totalMatches,
             domain_mention_count: domainMatch.totalMatches,
-            web_search: webSearch,
+            web_search: actualWebSearchOccurred,
             intent_classification: summary.intentClassification,
             lcp: summary.lcp,
             actionability: summary.actionability,

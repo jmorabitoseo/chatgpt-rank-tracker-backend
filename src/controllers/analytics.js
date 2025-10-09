@@ -6,8 +6,6 @@ const { supabase } = require("../config");
  * Helper: Calculate percentage change between two values with safeguards
  */
 const calculatePercentageChange = (current, previous) => {
-  console.log("current: ", current);
-  console.log("previous: ", previous);
   // Handle edge cases
   if (!previous || previous === 0) {
     return current > 0 ? 100 : 0; // If no previous data but current exists, show 100% growth
@@ -42,6 +40,38 @@ const filterByTimeRange = (results, startDaysAgo, endDaysAgo = 0) => {
 };
 
 /**
+ * Helper: Filter tracking results by custom date range
+ */
+const filterByCustomDateRange = (results, startDate, endDate) => {
+  if (!results || !Array.isArray(results)) return [];
+  if (!startDate || !endDate) return results;
+  
+  const startTime = new Date(startDate).getTime();
+  const endTime = new Date(endDate).getTime();
+  
+  // Add one day to endTime to include the entire end date
+  const endTimeInclusive = endTime + (24 * 60 * 60 * 1000) - 1;
+  
+  const filteredResults = results.filter((r) => {
+    if (!r.timestamp) return false;
+    
+    // Handle both timestamp formats (number and string)
+    let timestamp;
+    if (typeof r.timestamp === 'string') {
+      timestamp = new Date(r.timestamp).getTime();
+    } else {
+      timestamp = Number(r.timestamp);
+    }
+    
+    if (isNaN(timestamp)) return false;
+    
+    return timestamp >= startTime && timestamp <= endTimeInclusive;
+  });
+  
+  return filteredResults;
+};
+
+/**
  * Helper: Parse SERP JSON field safely
  */
 const parseSerpData = (serp) => {
@@ -67,101 +97,200 @@ const extractDomain = (url) => {
 };
 
 /**
+ * Helper: Filter prompts by tags
+ */
+const filterPromptsByTags = async (projectId, selectedTags) => {
+  if (!selectedTags || selectedTags.length === 0) {
+    return null; // No filtering needed
+  }
+
+  const { data: promptsWithTags, error } = await supabase
+    .from("prompts")
+    .select(`
+      id, 
+      enabled, 
+      created_at,
+      prompt_tags!inner(
+        tag_id,
+        tags!inner(
+          name
+        )
+      )
+    `)
+    .eq("project_id", projectId)
+    .in("prompt_tags.tags.name", selectedTags);
+
+  if (error) {
+    throw new Error(`Failed to fetch prompts with tags: ${error.message}`);
+  }
+
+  // Flatten and deduplicate
+  const uniquePrompts = new Map();
+  promptsWithTags?.forEach(prompt => {
+    if (!uniquePrompts.has(prompt.id)) {
+      uniquePrompts.set(prompt.id, {
+        id: prompt.id,
+        enabled: prompt.enabled,
+        created_at: prompt.created_at
+      });
+    }
+  });
+  
+  return Array.from(uniquePrompts.values());
+};
+
+/**
  * Main Controller: Get User Analytics
  */
 const getUserAnalytics = async (req, res) => {
   try {
     const { userId } = req.params;
     const days = parseInt(req.query.days) || 90;
+    const projectId = req.query.projectId; // Optional project ID for project-specific analytics
+    const startDate = req.query.startDate; // Optional start date
+    const endDate = req.query.endDate; // Optional end date
+    const selectedTags = req.query.tags ? req.query.tags.split(',') : []; // Optional tag filtering
 
     if (!userId) {
       return res.status(400).json({
         error: "userId is required in URL params",
-        example: "/api/analytics/:userId?days=90",
+        example: "/api/analytics/:userId?days=90&projectId=optional&startDate=2024-01-01&endDate=2024-01-31",
       });
     }
 
-    console.log(`Fetching analytics for user: ${userId}, days: ${days}`);
 
     // ========================================
-    // STEP 1: Fetch all projects for the user
+    // STEP 1: Fetch projects for the user (specific or all)
     // ========================================
-    const { data: projects, error: projectsError } = await supabase
-      .from("projects")
-      .select("id")
-      .eq("user_id", userId);
+    let projectIds = [];
+    
+    if (projectId) {
+      // Fetch specific project and verify it belongs to the user
+      const { data: project, error: projectError } = await supabase
+        .from("projects")
+        .select("id")
+        .eq("id", projectId)
+        .eq("user_id", userId)
+        .single();
 
-    if (projectsError) {
-      throw new Error(`Failed to fetch projects: ${projectsError.message}`);
+      if (projectError) {
+        throw new Error(`Failed to fetch project: ${projectError.message}`);
+      }
+
+      if (!project) {
+        return res.status(404).json({
+          error: "Project not found or does not belong to user",
+          projectId: projectId
+        });
+      }
+
+      projectIds = [projectId];
+    } else {
+      // Fetch all projects for the user
+      const { data: projects, error: projectsError } = await supabase
+        .from("projects")
+        .select("id")
+        .eq("user_id", userId);
+
+      if (projectsError) {
+        throw new Error(`Failed to fetch projects: ${projectsError.message}`);
+      }
+
+      if (!projects || projects.length === 0) {
+        return res.json(getEmptyAnalytics(userId, days));
+      }
+
+      projectIds = projects.map((p) => p.id);
     }
 
-    if (!projects || projects.length === 0) {
-      return res.json(getEmptyAnalytics(userId, days));
+    // ========================================
+    // STEP 2: Fetch prompts (with tag filtering if specified)
+    // ========================================
+    let allPrompts;
+    
+    if (selectedTags.length > 0 && projectId) {
+      // Filter prompts by tags for specific project
+      allPrompts = await filterPromptsByTags(projectId, selectedTags);
+    } else {
+      // Fetch all prompts without tag filtering
+      const { data: prompts, error: promptsError } = await supabase
+        .from("prompts")
+        .select("id, enabled, created_at")
+        .in("project_id", projectIds);
+
+      if (promptsError) {
+        throw new Error(`Failed to fetch prompts: ${promptsError.message}`);
+      }
+      
+      allPrompts = prompts;
     }
 
-    const projectIds = projects.map((p) => p.id);
-    console.log(`Found ${projectIds.length} projects`);
 
     // ========================================
-    // STEP 2: Fetch all prompts across all projects
+    // STEP 3: Fetch tracking results (filtered by prompts if tags are selected)
     // ========================================
-    const { data: allPrompts, error: promptsError } = await supabase
-      .from("prompts")
-      .select("id, enabled, created_at")
-      .in("project_id", projectIds);
+    let allTrackingResults;
+    
+    if (selectedTags.length > 0 && projectId && allPrompts && allPrompts.length > 0) {
+      // If tags are selected, only fetch tracking results for the filtered prompts
+      const promptIds = allPrompts.map(p => p.id);
+      const { data: trackingResults, error: trackingError } = await supabase
+        .from("tracking_results")
+        .select("*")
+        .eq("project_id", projectId)
+        .in("prompt_id", promptIds);
 
-    if (promptsError) {
-      throw new Error(`Failed to fetch prompts: ${promptsError.message}`);
+      if (trackingError) {
+        throw new Error(
+          `Failed to fetch tracking results for tagged prompts: ${trackingError.message}`
+        );
+      }
+      
+      allTrackingResults = trackingResults || [];
+    } else {
+      // Fetch all tracking results without tag filtering
+      const { data: trackingResults, error: trackingError } = await supabase
+        .from("tracking_results")
+        .select("*")
+        .in("project_id", projectIds);
+
+      if (trackingError) {
+        throw new Error(
+          `Failed to fetch tracking results: ${trackingError.message}`
+        );
+      }
+      
+      allTrackingResults = trackingResults || [];
     }
 
-    console.log(`Fetched ${allPrompts?.length || 0} prompts`);
-
-    // ========================================
-    // STEP 3: Fetch all tracking results
-    // ========================================
-    const { data: allTrackingResults, error: trackingError } = await supabase
-      .from("tracking_results")
-      .select("*")
-      .in("project_id", projectIds);
-
-    if (trackingError) {
-      throw new Error(
-        `Failed to fetch tracking results: ${trackingError.message}`
-      );
-    }
-
-    console.log(`Fetched ${allTrackingResults?.length || 0} tracking results`);
 
     // ========================================
     // STEP 4: Filter results by time periods (FIXED LOGIC)
     // ========================================
-    // Current period: last N days (0 to N days ago)
-    const currentResults = filterByTimeRange(allTrackingResults, days, 0);
+    let currentResults, previousResults;
     
-    // Previous period: N to 2N days ago (for comparison)
-    const previousResults = filterByTimeRange(allTrackingResults, days * 2, days);
+    if (startDate && endDate) {
+      // Use custom date range
+      currentResults = filterByCustomDateRange(allTrackingResults, startDate, endDate);
+      // For previous period, calculate a period of the same length before the start date
+      const rangeLength = new Date(endDate).getTime() - new Date(startDate).getTime();
+      const previousEndDate = new Date(new Date(startDate).getTime() - 1);
+      const previousStartDate = new Date(previousEndDate.getTime() - rangeLength);
+      previousResults = filterByCustomDateRange(allTrackingResults, previousStartDate.toISOString(), previousEndDate.toISOString());
+    } else {
+      // Use days-based filtering (default behavior)
+      currentResults = filterByTimeRange(allTrackingResults, days, 0);
+      previousResults = filterByTimeRange(allTrackingResults, days * 2, days);
+    }
 
-    console.log(
-      `Current period (last ${days} days): ${currentResults.length} results`
-    );
-    console.log(
-      `Previous period (${days}-${days * 2} days ago): ${previousResults.length} results`
-    );
 
-    // Filter prompts by time period
-    const now = Date.now();
-    const currentPeriodStart = now - days * 24 * 60 * 60 * 1000;
-    const previousPeriodStart = now - days * 2 * 24 * 60 * 60 * 1000;
-
-    const currentPrompts = allPrompts.filter(
-      (p) => p.enabled && new Date(p.created_at).getTime() >= currentPeriodStart
-    );
-    const previousPrompts = allPrompts.filter(
-      (p) =>
-        p.enabled &&
-        new Date(p.created_at).getTime() >= previousPeriodStart &&
-        new Date(p.created_at).getTime() < currentPeriodStart
-    );
+    // Get prompts that were actually used in tracking results for the current period
+    // This is more accurate than filtering by prompt creation date
+    const currentPromptIds = new Set(currentResults.map(r => r.prompt_id).filter(Boolean));
+    const previousPromptIds = new Set(previousResults.map(r => r.prompt_id).filter(Boolean));
+    
+    const currentPrompts = allPrompts.filter(p => p.enabled && currentPromptIds.has(p.id));
+    const previousPrompts = allPrompts.filter(p => p.enabled && previousPromptIds.has(p.id));
 
     // ========================================
     // STEP 5: Calculate all metrics
@@ -196,9 +325,15 @@ const getUserAnalytics = async (req, res) => {
     // ========================================
     // STEP 6: Return response
     // ========================================
+    
+    
     return res.json({
       user_id: userId,
       time_range_days: days,
+      project_id: projectId || null, // Include project ID in response
+      project_scope: projectId ? 'specific' : 'all', // Indicate scope
+      date_range: startDate && endDate ? { startDate, endDate } : null, // Include date range in response
+      selected_tags: selectedTags.length > 0 ? selectedTags : null, // Include selected tags in response
       total_results: currentResults.length,
       kpi_metrics: kpiMetrics,
       brand_presence: brandPresence,
@@ -242,17 +377,9 @@ function calculateKPIMetrics(
   const currentKeywordsCount = currentPrompts.length;
   const previousKeywordsCount = previousPrompts.length;
   
-  // Alternative: Calculate total enabled keywords at different time points
-  const currentPeriodEnd = Date.now();
-  const previousPeriodEnd = Date.now() - days * 24 * 60 * 60 * 1000;
-  
-  const keywordsAtCurrentPeriodEnd = allPrompts.filter(p => 
-    p.enabled && new Date(p.created_at).getTime() <= currentPeriodEnd
-  ).length;
-  
-  const keywordsAtPreviousPeriodEnd = allPrompts.filter(p => 
-    p.enabled && new Date(p.created_at).getTime() <= previousPeriodEnd
-  ).length;
+  // Use the actual prompt counts from the filtered results
+  const keywordsAtCurrentPeriodEnd = currentKeywordsCount;
+  const keywordsAtPreviousPeriodEnd = previousKeywordsCount;
 
   // 2. Average Sentiment Score
   const currentSentiments = currentResults
@@ -262,6 +389,7 @@ function calculateKPIMetrics(
     currentSentiments.length > 0
       ? currentSentiments.reduce((a, b) => a + b, 0) / currentSentiments.length
       : 0;
+
 
   const prevSentiments = previousResults
     .filter((r) => r.sentiment != null && !isNaN(r.sentiment))
@@ -349,20 +477,12 @@ function calculateKPIMetrics(
   const citationOpportunities = brandMentions - domainMentions;
   const prevCitationOpportunities = prevBrandMentions - prevDomainMentions;
 
-  console.log("=== TREND CALCULATION DEBUG ===");
-  console.log(`New keywords in current period: ${currentKeywordsCount}, Previous period: ${previousKeywordsCount}`);
-  console.log(`Total keywords at current period end: ${keywordsAtCurrentPeriodEnd}, Previous period end: ${keywordsAtPreviousPeriodEnd}`);
-  console.log(`Current period brand mentions: ${brandMentions}, Previous: ${prevBrandMentions}`);
-  console.log(`Current period search volume: ${totalSearchVolume}, Previous: ${prevSearchVolume}`);
-  console.log(`Current period sentiment: ${avgSentiment}, Previous: ${prevAvgSentiment}`);
-  console.log(`Current period brand presence: ${brandPresencePercent}%, Previous: ${prevBrandPresencePercent}%`);
-  console.log(`Total keywords (all enabled): ${totalKeywords}`);
 
   return {
     total_keywords: {
-      value: totalKeywords,
+      value: currentKeywordsCount,
       label: "Total Keywords",
-      subtitle: "Being tracked",
+      subtitle: "Active in selected period",
       trend: calculatePercentageChange(
         keywordsAtCurrentPeriodEnd,
         keywordsAtPreviousPeriodEnd
@@ -728,7 +848,7 @@ function getEmptyAnalytics(userId, days) {
       total_keywords: {
         value: 0,
         label: "Total Keywords",
-        subtitle: "Being tracked",
+        subtitle: "Active in selected period",
         trend: 0,
       },
       avg_sentiment_score: {

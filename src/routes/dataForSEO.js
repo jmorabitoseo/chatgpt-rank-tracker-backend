@@ -143,17 +143,28 @@ function extractUserCountry(task) {
 }
 
 /**
- * Extract web search flag from task data
+ * Detect if actual web search occurred from DataForSEO response
+ * This checks the actual response data, not just the requested flag from the checkbox.
+ * The presence of sources or search_results indicates the AI performed web retrieval.
  */
-function extractWebSearchFlag(task) {
+function detectActualWebSearch(dataForSeoResponse) {
   try {
-    if (task.data?.force_web_search !== undefined) {
-      return task.data.force_web_search;
+    const task = dataForSeoResponse.tasks?.[0];
+    // Check if user requested a forced web search; treated as actual retrieval
+    const forceRequested = Boolean(task?.data?.force_web_search);
+    const result = task?.result?.[0];
+    if (!result && !forceRequested) {
+      return false;
     }
-    return false; // Default to false if not specified
+    // Check if sources/citations exist (indicates web retrieval occurred)
+    const hasSources = Array.isArray(result?.sources) && result.sources.length > 0;
+    const hasSearchResults = Array.isArray(result?.search_results) && result.search_results.length > 0;
+    // Determine if web search occurred
+    const occurred = hasSources || hasSearchResults;
+    return Boolean(occurred);
   } catch (error) {
     console.warn(
-      "[DataForSEO] Failed to extract web search flag:",
+      "[DataForSEO] Failed to detect actual web search:",
       error.message
     );
     return false;
@@ -432,7 +443,7 @@ async function createNightlyTrackingResult(
       intent_classification: summary.intentClassification,
       lcp: summary.lcp,
       actionability: summary.actionability,
-      web_search: webSearch,
+      web_search: webSearch, // This is now actualWebSearchOccurred passed from caller
     };
 
     // Add AI volume data if available
@@ -537,8 +548,8 @@ router.post("/callback", async (req, res) => {
       extractQueryParameters(req);
     const openaiKey = await fetchUserOpenAIKey(userId);
     const userCountry = extractUserCountry(task);
-    const webSearch = extractWebSearchFlag(task);
-
+    const actualWebSearchOccurred = detectActualWebSearch(dataForSeoResponse);
+    console.log("ACtual WEB SEARCH:-----", promptId, actualWebSearchOccurred)
     // For nightly jobs, we need to get prompt data differently since there's no existing tracking_result
     let trackingResult = null;
     let promptData = null;
@@ -655,7 +666,7 @@ router.post("/callback", async (req, res) => {
           salience,
           aiVolumeData,
           summary,
-          webSearch
+          actualWebSearchOccurred
         );
       } else {
         // Update existing tracking result for regular job
@@ -679,7 +690,7 @@ router.post("/callback", async (req, res) => {
           lcp: summary.lcp,
           actionability: summary.actionability,
           serp: summary.serp,
-          web_search: webSearch,
+          web_search: actualWebSearchOccurred,
         };
 
         // Add AI volume data if available

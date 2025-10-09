@@ -270,7 +270,7 @@ app.post("/enqueue", async (req, res) => {
     userCity = "",
     userCountry = "",
     openaiKey,
-    webSearch = false,
+    webSearch = false, // User's checkbox preference to FORCE web search
     openaiModel = process.env.DEFAULT_OPENAI_MODEL || "gpt-4",
     tags = [],
   } = requestBody;
