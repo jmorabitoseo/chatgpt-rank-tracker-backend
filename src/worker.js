@@ -22,6 +22,12 @@ const {
   countDomainMatches
 } = require('./utils/analysis');
 
+const { EnhancedAnalyzer } = require('./utils/EnhancedAnalyzer');
+
+const {
+  getBatchPromptAIVolume
+} = require('./utils/dataForSeoService');
+
 // ───────────── SMTP via Mailgun transport ─────────────
 const transporter = nodemailer.createTransport(
   mgTransport({
@@ -76,8 +82,22 @@ subscription.on('message', async message => {
     batchNumber = 0,
     totalBatches = 1,
     userCountry = 'US',
-    webSearch = false
+    webSearch = false, // User's REQUESTED web search (from checkbox)
+    service
   } = JSON.parse(message.data.toString());
+  
+  // NOTE: webSearch parameter is the user's INTENT to force web search.
+  // The actual web_search field stored in DB is detected from response data:
+  // - BrightData: web_search_triggered field or citations present
+  // - DataForSEO: sources/search_results arrays present
+  // This ensures we track ACTUAL web retrieval, not just user preference.
+
+  // Only handle brightdata messages
+  if (service && service.toLowerCase() !== 'brightdata') {
+    console.log('Skipping non-BrightData message on BrightData worker.');
+    message.ack();
+    return;
+  }
 
   let actualSnapshotID = snapshotID;
 
@@ -95,7 +115,8 @@ subscription.on('message', async message => {
         url: 'https://chatgpt.com/',
         prompt: prompt.text,
         country: userCountry,
-        web_search: webSearch
+        web_search: webSearch,
+        // additional_prompt: `${webSearch ? 'Please search the web for current information about: ' + prompt.text : ''}`
       }));
 
       const { data } = await axios.post(
@@ -117,16 +138,16 @@ subscription.on('message', async message => {
         { headers: { Authorization: `Bearer ${bright.key}` } }
       );
       results = data;
-      // console.log("------ Fetching results for queue process from Bright Data-----: ", actualSnapshotID, results, Array.isArray(results));
+      console.log("------ Fetching results for queue process from Bright Data-----: ", actualSnapshotID);
       
       // Handle non-array responses (status objects)
       if (!Array.isArray(results)) {
         if (results.status === 'failed') {
           throw new Error(`Bright Data snapshot failed: ${results.message || 'Unknown error'}`);
         } else if (results.status === 'running' || results.status === 'building' || results.status === 'pending') {
-          // console.log(`Snapshot ${actualSnapshotID} still running, will retry in 30s...`);
+          console.log(`Snapshot ${actualSnapshotID} still running, will retry in 30s...`);
         } else {
-          // console.warn(`Unexpected status from Bright Data: ${results.status}`);
+          console.warn(`Unexpected status from Bright Data: ${results.status}`);
         }
       }
     } while (!Array.isArray(results));
@@ -142,7 +163,27 @@ subscription.on('message', async message => {
       console.warn(`BrightData returned ${results.length} results but expected ${expectedPromptCount} prompts for snapshot ${actualSnapshotID}`);
     }
 
-        // 3) Process each result sequentially and track which prompts were processed
+        // 3) Fetch AI volume data for all prompts in this batch (before processing individual results)
+    let aiVolumeDataMap = new Map();
+    try {
+      console.log(`Fetching AI volume data for ${prompts.length} prompts...`);
+      const promptTexts = prompts.map(p => p.text);
+      const aiVolumeResults = await getBatchPromptAIVolume(promptTexts, userCountry === 'US' ? 2840 : 2840); // Default to US for now
+      console.log("----- AI VOL: -------", aiVolumeResults)
+      // Map AI volume results back to prompts
+      prompts.forEach((prompt, index) => {
+        if (aiVolumeResults[index]) {
+          aiVolumeDataMap.set(prompt.trackingId, aiVolumeResults[index]);
+        }
+      });
+      
+      console.log(`AI volume data fetched for ${aiVolumeDataMap.size} out of ${prompts.length} prompts`);
+    } catch (aiVolumeError) {
+      console.warn('Failed to fetch AI volume data, continuing without it:', aiVolumeError.message);
+      // Continue processing without AI volume data
+    }
+
+    // 4) Process each result sequentially and track which prompts were processed
     const processedPromptIds = new Set();
     
     for (let bres of results) {
@@ -170,6 +211,14 @@ subscription.on('message', async message => {
           brandMentions = [];
         }
         
+        // Detect if web search actually occurred (not just what user requested)
+        // BrightData provides web_search_triggered field, also check for citations
+        // This ensures we track ACTUAL web retrieval, not just the checkbox setting
+        const actualWebSearchOccurred = Boolean(
+          bres.web_search_triggered || 
+          (bres.citations && bres.citations.length > 0)
+        );
+        
         const match = countBrandMatches(brandMentions, answerText);
         const domainMatch = countDomainMatches(job.domainMentions, bres.citations);
         let sentiment = 0, salience = 0;
@@ -184,52 +233,92 @@ subscription.on('message', async message => {
             5, `Salience for "${job.text}"`
           );
         }
+
+        const { answer_html, response_raw, answer_section_html, ...brightDataFilterObj } = bres;
+        const serpAnalyzer = new EnhancedAnalyzer();
+        const analyzerResult = serpAnalyzer.analyzeResponse(brightDataFilterObj);
+
+        // Pull out the summary
+        const { summary } = analyzerResult;
+        
+
+        // Get AI volume data for this prompt
+        const aiVolumeData = aiVolumeDataMap.get(job.trackingId);
   
         // 4) Handle tracking_results: update stub for regular jobs, create new entry for nightly jobs
         if (isNightly) {
   
           // Create new tracking_results entry directly with real data
+          const insertData = {
+            prompt_id: job.id,
+            prompt: job.text,
+            project_id: job.projectId,
+            user_id: job.userId,
+            snapshot_id: actualSnapshotID,
+            status: 'fulfilled',
+            timestamp: Date.now(),
+            is_present: match.anyMatch,
+            is_domain_present: domainMatch.anyMatch,
+            sentiment,
+            salience,
+            response: JSON.stringify({answer_text: answerText}),
+            brand_mentions: job.brandMentions,
+            domain_mentions: job.domainMentions,
+            brand_name: String(job.brandMentions),
+            source: 'Bright Data (Nightly)',
+            mention_count: match.totalMatches,
+            domain_mention_count: domainMatch.totalMatches,
+            web_search: actualWebSearchOccurred,
+            intent_classification: summary.intentClassification,
+            lcp: summary.lcp,
+            actionability: summary.actionability,
+            serp: summary.serp
+          };
+
+          // Add AI volume data if available
+          if (aiVolumeData) {
+            insertData.ai_search_volume = aiVolumeData.current_volume;
+            insertData.ai_monthly_trends = aiVolumeData.monthly_trends;
+            insertData.ai_volume_fetched_at = new Date().toISOString();
+            insertData.ai_volume_location_code = aiVolumeData.location_code || 2840;
+          }
+
           const { error: insertErr } = await supabase
             .from('tracking_results')
-            .insert([{
-              prompt_id: job.id,
-              prompt: job.text,
-              project_id: job.projectId,
-              user_id: job.userId,
-              snapshot_id: actualSnapshotID,
-              status: 'fulfilled',
-              timestamp: Date.now(),
-              is_present: match.anyMatch,
-              is_domain_present: domainMatch.anyMatch,
-              sentiment,
-              salience,
-              response: JSON.stringify({answer_text: answerText}),
-              brand_mentions: job.brandMentions,
-              domain_mentions: job.domainMentions,
-              brand_name: String(job.brandMentions),
-              source: 'Bright Data (Nightly)',
-              mention_count: match.totalMatches,
-              domain_mention_count: domainMatch.totalMatches
-            }]);
+            .insert([insertData]);
   
           if (insertErr) throw insertErr;
         } else {
           // Update existing tracking_results stub (regular user-initiated jobs)
+          const updateData = {
+            snapshot_id: actualSnapshotID,
+            status: 'fulfilled',
+            timestamp: Date.now(),
+            is_present: match.anyMatch,
+            is_domain_present: domainMatch.anyMatch,
+            sentiment,
+            salience,
+            response: JSON.stringify({answer_text: answerText}),
+            mention_count: match.totalMatches,
+            domain_mention_count: domainMatch.totalMatches,
+            web_search: actualWebSearchOccurred,
+            intent_classification: summary.intentClassification,
+            lcp: summary.lcp,
+            actionability: summary.actionability,
+            serp: summary.serp
+          };
+
+          // Add AI volume data if available
+          if (aiVolumeData) {
+            updateData.ai_search_volume = aiVolumeData.current_volume;
+            updateData.ai_monthly_trends = aiVolumeData.monthly_trends;
+            updateData.ai_volume_fetched_at = new Date().toISOString();
+            updateData.ai_volume_location_code = aiVolumeData.location_code || 2840;
+          }
   
           const { error: updateErr } = await supabase
             .from('tracking_results')
-            .update({
-              snapshot_id: actualSnapshotID,
-              status: 'fulfilled',
-              timestamp: Date.now(),
-              is_present: match.anyMatch,
-              is_domain_present: domainMatch.anyMatch,
-              sentiment,
-              salience,
-              response: JSON.stringify({answer_text: answerText}),
-              mention_count: match.totalMatches,
-              domain_mention_count: domainMatch.totalMatches
-            })
+            .update(updateData)
             .eq('id', job.trackingId);
   
           if (updateErr) throw updateErr;
