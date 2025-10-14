@@ -12,6 +12,12 @@ const { sanitizeText } = require("../utils/textSanitizer");
 const { retryWithBackoff } = require("../utils/apiHelpers");
 const { EnhancedAnalyzer } = require("../utils/EnhancedAnalyzer");
 const router = express.Router();
+const {
+  cleanDomain,
+  extractDomainFromUrl,
+  cleanUrlKeepPath,
+  formatCitationsForDB
+} = require('../utils/urlUtils');
 
 // ───────────── SMTP via Mailgun transport ─────────────
 const transporter = nodemailer.createTransport(
@@ -59,6 +65,11 @@ function extractCitations(dataForSeoResponse) {
 
   return citations;
 }
+
+/**
+ * Format citations for database storage (only title, domain, and url)
+ */
+// Use shared formatCitationsForDB from utils/urlUtils
 
 /**
  * Extract query parameters from request
@@ -417,6 +428,9 @@ async function createNightlyTrackingResult(
   webSearch
 ) {
   try {
+    // Format citations for database storage
+    const formattedCitations = formatCitationsForDB(citations);
+    
     const insertData = {
       prompt_id: promptData.promptId,
       prompt: promptData.prompt,
@@ -431,8 +445,8 @@ async function createNightlyTrackingResult(
       salience,
       response: JSON.stringify({
         answer_text: answerText,
-        citations,
       }),
+      citations: formattedCitations, // Store formatted citations in dedicated field
       brand_mentions: promptData.brandMentions,
       domain_mentions: promptData.domainMentions,
       brand_name: String(promptData.brandMentions),
@@ -669,6 +683,9 @@ router.post("/callback", async (req, res) => {
           actualWebSearchOccurred
         );
       } else {
+        // Format citations for database storage
+        const formattedCitations = formatCitationsForDB(citations);
+        
         // Update existing tracking result for regular job
         const updateData = {
           status: "fulfilled",
@@ -679,9 +696,9 @@ router.post("/callback", async (req, res) => {
           salience,
           response: JSON.stringify({
             answer_text: answerText,
-            citations,
             raw_response: result,
           }),
+          citations: formattedCitations, // Store formatted citations in dedicated field
           mention_count: match.totalMatches,
           domain_mention_count: domainMatch.totalMatches,
           source: "DataForSEO",

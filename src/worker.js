@@ -14,6 +14,12 @@ const {
   pubsubSubscription,
   createOpenAI
 } = require('./config');
+const {
+  cleanDomain,
+  extractDomainFromUrl,
+  cleanUrlKeepPath,
+  formatCitationsForDB
+} = require('./utils/urlUtils');
 
 const {
   analyzeSentiment,
@@ -42,6 +48,20 @@ const transporter = nodemailer.createTransport(
 function delay(ms) {
   return new Promise(res => setTimeout(res, ms));
 }
+
+// Example usage for testing:
+// const testCitations = [
+//   {
+//     "url": "https://www.androidauthority.com/apple-iphone-17-3453759/?utm_source=chatgpt.com",
+//     "title": "iPhone 17 series: Specs, price, colors, features, and more!",
+//     "description": null,
+//     "icon": null,
+//     "domain": "Android Authority",
+//     "cited": true
+//   }
+// ];
+// console.log(formatBrightDataCitationsForDB(testCitations));
+// Output: [{ title: "iPhone 17 series: Specs, price, colors, features, and more!", domain: "androidauthority.com", url: "https://www.androidauthority.com/apple-iphone-17-3453759/?utm_source=chatgpt.com" }]
 
 async function retryWithBackoff(fn, maxRetries = 5, label = '') {
   let lastErr;
@@ -244,6 +264,9 @@ subscription.on('message', async message => {
 
         // Get AI volume data for this prompt
         const aiVolumeData = aiVolumeDataMap.get(job.trackingId);
+        
+        // Format citations for database storage (clean url/domain, keep path, remove params)
+        const formattedCitations = formatCitationsForDB(bres.citations);
   
         // 4) Handle tracking_results: update stub for regular jobs, create new entry for nightly jobs
         if (isNightly) {
@@ -262,6 +285,7 @@ subscription.on('message', async message => {
             sentiment,
             salience,
             response: JSON.stringify({answer_text: answerText}),
+            citations: formattedCitations, // Store formatted citations in dedicated field
             brand_mentions: job.brandMentions,
             domain_mentions: job.domainMentions,
             brand_name: String(job.brandMentions),
@@ -299,6 +323,7 @@ subscription.on('message', async message => {
             sentiment,
             salience,
             response: JSON.stringify({answer_text: answerText}),
+            citations: formattedCitations, // Store formatted citations in dedicated field
             mention_count: match.totalMatches,
             domain_mention_count: domainMatch.totalMatches,
             web_search: actualWebSearchOccurred,

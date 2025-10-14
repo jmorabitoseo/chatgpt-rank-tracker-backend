@@ -96,6 +96,8 @@ const extractDomain = (url) => {
   }
 };
 
+
+
 /**
  * Helper: Filter prompts by tags
  */
@@ -311,23 +313,15 @@ const getUserAnalytics = async (req, res) => {
     const serpFeatures = calculateSerpFeatures(currentResults);
     const mostCitedPages = calculateMostCitedPages(currentResults);
     const mostCitedWebsites = calculateMostCitedWebsites(currentResults);
-    console.log(`[getUserAnalytics] projectId: ${projectId}, currentResults count: ${currentResults.length}`);
     const topPerformingKeywords = getTopPerformingKeywords(
       currentResults,
       allPrompts,
       projectId
     );
-    const aiInsights = generateAIInsights(
-      kpiMetrics,
-      currentResults,
-      sentimentDistribution,
-      salienceDistribution
-    );
 
     // ========================================
     // STEP 6: Return response
     // ========================================
-    
     
     return res.json({
       user_id: userId,
@@ -345,7 +339,6 @@ const getUserAnalytics = async (req, res) => {
       serp_features: serpFeatures,
       most_cited_pages: mostCitedPages,
       most_cited_websites: mostCitedWebsites,
-      ai_insights: aiInsights,
       top_performing_keywords: topPerformingKeywords,
       timestamp: new Date().toISOString(),
     });
@@ -701,10 +694,44 @@ function calculateSerpFeatures(results) {
  * Calculate Most Cited Pages
  */
 function calculateMostCitedPages(results) {
-  return [
-    { url: "nike.com/air-max-review", count: 89, percentage: 34 },
-    { url: "runnersworld.com/best-running-shoes", count: 73, percentage: 28 },
-  ];
+  const urlCounts = new Map();
+
+  results.forEach((r) => {
+    try {
+      // Parse citations from the citations field (array of citation objects)
+      let citations = [];
+      
+      if (r.citations && Array.isArray(r.citations)) {
+        // Citations is already an array of objects
+        citations = r.citations;
+      } else if (r.citations && typeof r.citations === 'string') {
+        // Citations is a JSON string, parse it
+        citations = JSON.parse(r.citations);
+      }
+
+      // Count each URL
+      citations.forEach((citation) => {
+        if (citation.url) {
+          const url = citation.url;
+          const count = urlCounts.get(url) || 0;
+          urlCounts.set(url, count + 1);
+        }
+      });
+    } catch (e) {
+      // Skip invalid citations data
+      console.warn('Error parsing citations for most cited pages:', e.message);
+    }
+  });
+
+  const total = results.length || 1;
+  return Array.from(urlCounts.entries())
+    .sort(([,a], [,b]) => b - a)
+    .slice(0, 10) // Return top 10 most cited pages
+    .map(([url, count]) => ({
+      url,
+      count,
+      percentage: Math.round((count / total) * 100)
+    }));
 }
 
 /**
@@ -715,27 +742,43 @@ function calculateMostCitedWebsites(results) {
 
   results.forEach((r) => {
     try {
-      const response = typeof r.response === 'string' ? JSON.parse(r.response) : r.response;
-      if (response?.citations) {
-        response.citations.forEach((citation) => {
-          if (citation.url) {
+      // Parse citations from the citations field (array of citation objects)
+      let citations = [];
+      
+      if (r.citations && Array.isArray(r.citations)) {
+        // Citations is already an array of objects
+        citations = r.citations;
+      } else if (r.citations && typeof r.citations === 'string') {
+        // Citations is a JSON string, parse it
+        citations = JSON.parse(r.citations);
+      }
+
+      // Count each domain from citations
+      citations.forEach((citation) => {
+        if (citation.domain) {
+          // Use the domain field directly if available
+          const domain = citation.domain.replace(/^www\./, ''); // Remove www. prefix
+          const count = domainCounts.get(domain) || 0;
+          domainCounts.set(domain, count + 1);
+        } else if (citation.url) {
+          // Fallback: extract domain from URL if domain field is not available
           const domain = extractDomain(citation.url);
           if (domain) {
-              const count = domainCounts.get(domain) || 0;
-              domainCounts.set(domain, count + 1);
+            const count = domainCounts.get(domain) || 0;
+            domainCounts.set(domain, count + 1);
           }
         }
       });
-      }
     } catch (e) {
-      // Skip invalid JSON
+      // Skip invalid citations data
+      console.warn('Error parsing citations for most cited websites:', e.message);
     }
   });
 
   const total = results.length || 1;
   return Array.from(domainCounts.entries())
     .sort(([,a], [,b]) => b - a)
-    .slice(0, 10)
+    .slice(0, 10) // Return top 10 most cited websites
     .map(([domain, count]) => ({
       domain,
       count,
@@ -814,8 +857,6 @@ function getTopPerformingKeywords(results, allPrompts, projectId) {
   const filteredResults = projectId 
     ? results.filter(r => r.project_id === projectId)
     : results;
-
-  console.log(`[getTopPerformingKeywords] projectId: ${projectId}, total results: ${results.length}, filtered results: ${filteredResults.length}`);
 
   return filteredResults
     .filter(r => {
@@ -1003,28 +1044,6 @@ function getEmptyAnalytics(userId, days) {
     serp_features: [],
     most_cited_pages: [],
     most_cited_websites: [],
-    ai_insights: {
-      strong_performance: {
-        title: "Strong Performance",
-        message: "No data available yet. Start tracking keywords to see insights.",
-        type: "info",
-      },
-      citation_gap: {
-        title: "Citation Gap",
-        message: "No data available yet.",
-        type: "info",
-      },
-      top_opportunity: {
-        title: "Top Opportunity",
-        message: "No tracking data available yet.",
-        type: "info",
-      },
-      trend_alert: {
-        title: "Trend Alert",
-        message: "No trend data available yet.",
-        type: "info",
-      },
-    },
     top_performing_keywords: [],
     timestamp: new Date().toISOString(),
   };
