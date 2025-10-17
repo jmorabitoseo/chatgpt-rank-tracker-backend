@@ -267,8 +267,10 @@ Text to analyze:
 ${response}
 """
 
-Respond ONLY with a JSON object in this exact format:
-{"sentiment": <number>, "salience": <number>}`;
+// Respond ONLY with a JSON object in this exact format:
+// {"sentiment": <number>, "salience": <number>}`;
+
+
   try {
     const completion = await openai.chat.completions.create({
       model,

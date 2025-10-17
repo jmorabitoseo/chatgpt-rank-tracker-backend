@@ -318,30 +318,48 @@ const getUserAnalytics = async (req, res) => {
       allPrompts,
       projectId
     );
+    // AI insights removed - using frontend-generated fallback insights only
+
 
     // ========================================
-    // STEP 6: Return response
+    // STEP 6: Return response with safety checks
     // ========================================
     
-    return res.json({
+    // Ensure all calculated values are valid and have proper structure
+    const safeResponse = {
       user_id: userId,
       time_range_days: days,
-      project_id: projectId || null, // Include project ID in response
-      project_scope: projectId ? 'specific' : 'all', // Indicate scope
-      date_range: startDate && endDate ? { startDate, endDate } : null, // Include date range in response
-      selected_tags: selectedTags.length > 0 ? selectedTags : null, // Include selected tags in response
-      total_results: currentResults.length,
-      kpi_metrics: kpiMetrics,
-      brand_presence: brandPresence,
-      domain_presence: domainPresence,
-      sentiment_distribution: sentimentDistribution,
-      salience_distribution: salienceDistribution,
-      serp_features: serpFeatures,
-      most_cited_pages: mostCitedPages,
-      most_cited_websites: mostCitedWebsites,
-      top_performing_keywords: topPerformingKeywords,
-      timestamp: new Date().toISOString(),
-    });
+      project_id: projectId || null,
+      project_scope: projectId ? 'specific' : 'all',
+      date_range: startDate && endDate ? { startDate, endDate } : null,
+      selected_tags: selectedTags.length > 0 ? selectedTags : null,
+      total_results: currentResults ? currentResults.length : 0,
+      kpi_metrics: kpiMetrics || {},
+      brand_presence: brandPresence || { mentioned: { count: 0, percentage: 0 }, not_mentioned: { count: 0, percentage: 0 } },
+      domain_presence: domainPresence || { cited: { count: 0, percentage: 0 }, not_cited: { count: 0, percentage: 0 } },
+      sentiment_distribution: sentimentDistribution || {
+        very_positive: { count: 0, percentage: 0 },
+        positive: { count: 0, percentage: 0 },
+        neutral: { count: 0, percentage: 0 },
+        slightly_neutral: { count: 0, percentage: 0 },
+        negative: { count: 0, percentage: 0 },
+        not_mentions: { count: 0, percentage: 0 }
+      },
+      salience_distribution: salienceDistribution || {
+        primary_focus: { count: 0, percentage: 0 },
+        major_focus: { count: 0, percentage: 0 },
+        moderate_focus: { count: 0, percentage: 0 },
+        minor_focus: { count: 0, percentage: 0 },
+        low: { count: 0, percentage: 0 },
+        not_mentions: { count: 0, percentage: 0 }
+      },
+      serp_features: serpFeatures || [],
+      most_cited_pages: mostCitedPages || [],
+      most_cited_websites: mostCitedWebsites || [],
+      top_performing_keywords: topPerformingKeywords || []
+    };
+
+    return res.json(safeResponse);
   } catch (error) {
     console.error("Analytics API Error:", error);
     return res.status(500).json({
@@ -541,65 +559,132 @@ function calculateKPIMetrics(
  * Calculate Brand Presence (is_present field)
  */
 function calculateBrandPresence(results) {
-  const validResults = results.filter((r) => r.is_present !== null);
-  const mentioned = validResults.filter((r) => r.is_present === true).length;
-  const notMentioned = validResults.length - mentioned;
-  const total = validResults.length || 1;
+  try {
+    if (!results || !Array.isArray(results)) {
+      return {
+        mentioned: { count: 0, percentage: 0 },
+        not_mentioned: { count: 0, percentage: 0 }
+      };
+    }
 
-  return {
-    mentioned: {
-      count: mentioned,
-      percentage: Math.round((mentioned / total) * 100),
-    },
-    not_mentioned: {
-      count: notMentioned,
-      percentage: Math.round((notMentioned / total) * 100),
-    },
-  };
+    const validResults = results.filter((r) => r && r.is_present !== null);
+    const mentioned = validResults.filter((r) => r.is_present === true).length;
+    const notMentioned = validResults.length - mentioned;
+    const total = validResults.length || 1;
+
+    return {
+      mentioned: {
+        count: mentioned,
+        percentage: Math.round((mentioned / total) * 100),
+      },
+      not_mentioned: {
+        count: notMentioned,
+        percentage: Math.round((notMentioned / total) * 100),
+      },
+    };
+  } catch (error) {
+    console.warn('Error calculating brand presence:', error);
+    return {
+      mentioned: { count: 0, percentage: 0 },
+      not_mentioned: { count: 0, percentage: 0 }
+    };
+  }
 }
 
 /**
  * Calculate Domain Presence (is_domain_present field)
  */
 function calculateDomainPresence(results) {
-  const validResults = results.filter((r) => r.is_domain_present !== null);
-  const cited = validResults.filter((r) => r.is_domain_present === true).length;
-  const notCited = validResults.length - cited;
-  const total = validResults.length || 1;
+  try {
+    if (!results || !Array.isArray(results)) {
+      return {
+        cited: { count: 0, percentage: 0 },
+        not_cited: { count: 0, percentage: 0 }
+      };
+    }
 
-  return {
-    cited: {
-      count: cited,
-      percentage: Math.round((cited / total) * 100),
-    },
-    not_cited: {
-      count: notCited,
-      percentage: Math.round((notCited / total) * 100),
-    },
-  };
+    const validResults = results.filter((r) => r && r.is_domain_present !== null);
+    const cited = validResults.filter((r) => r.is_domain_present === true).length;
+    const notCited = validResults.length - cited;
+    const total = validResults.length || 1;
+
+    return {
+      cited: {
+        count: cited,
+        percentage: Math.round((cited / total) * 100),
+      },
+      not_cited: {
+        count: notCited,
+        percentage: Math.round((notCited / total) * 100),
+      },
+    };
+  } catch (error) {
+    console.warn('Error calculating domain presence:', error);
+    return {
+      cited: { count: 0, percentage: 0 },
+      not_cited: { count: 0, percentage: 0 }
+    };
+  }
 }
 
 /**
  * Calculate Sentiment Distribution
- * Positive: sentiment >= 60
- * Neutral: 40 <= sentiment < 60
- * Negative: sentiment < 40
+ * Very Positive: sentiment >= 81
+ * Positive: sentiment >= 61
+ * Neutral: sentiment >= 41
+ * Slightly Neutral: sentiment >= 21
+ * Negative: sentiment >= 1
+ * Not available: sentiment < 1
  */
 function calculateSentimentDistribution(results) {
-  const counts = { positive: 0, neutral: 0, negative: 0 };
+  // Initialize with safe defaults
+  const counts = { 
+    very_positive: 0, 
+    positive: 0, 
+    neutral: 0, 
+    slightly_neutral: 0, 
+    negative: 0, 
+    not_mentions: 0 
+  };
+
+  // Handle null/undefined results
+  if (!results || !Array.isArray(results)) {
+    return {
+      very_positive: { count: 0, percentage: 0 },
+      positive: { count: 0, percentage: 0 },
+      neutral: { count: 0, percentage: 0 },
+      slightly_neutral: { count: 0, percentage: 0 },
+      negative: { count: 0, percentage: 0 },
+      not_mentions: { count: 0, percentage: 0 }
+    };
+  }
 
   results.forEach((r) => {
-    if (r.sentiment != null && !isNaN(r.sentiment)) {
-      const score = Number(r.sentiment);
-      if (score >= 60) counts.positive++;
-      else if (score >= 40) counts.neutral++;
-      else counts.negative++;
+    try {
+      if (r && r.sentiment != null && !isNaN(r.sentiment)) {
+        const score = Number(r.sentiment);
+        if (score >= 81) counts.very_positive++;
+        else if (score >= 61) counts.positive++;
+        else if (score >= 41) counts.neutral++;
+        else if (score >= 21) counts.slightly_neutral++;
+        else if (score >= 1) counts.negative++;
+        else counts.not_mentions++;
+      } else {
+        counts.not_mentions++;
+      }
+    } catch (error) {
+      console.warn('Error processing sentiment data:', error);
+      counts.not_mentions++;
     }
   });
 
-  const total = counts.positive + counts.neutral + counts.negative || 1;
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0) || 1;
 
   return {
+    very_positive: {
+      count: counts.very_positive,
+      percentage: Math.round((counts.very_positive / total) * 100),
+    },
     positive: {
       count: counts.positive,
       percentage: Math.round((counts.positive / total) * 100),
@@ -608,45 +693,98 @@ function calculateSentimentDistribution(results) {
       count: counts.neutral,
       percentage: Math.round((counts.neutral / total) * 100),
     },
+    slightly_neutral: {
+      count: counts.slightly_neutral,
+      percentage: Math.round((counts.slightly_neutral / total) * 100),
+    },
     negative: {
       count: counts.negative,
       percentage: Math.round((counts.negative / total) * 100),
+    },
+    not_mentions: {
+      count: counts.not_mentions,
+      percentage: Math.round((counts.not_mentions / total) * 100),
     },
   };
 }
 
 /**
  * Calculate Salience Distribution
- * High: salience >= 60
- * Medium: 40 <= salience < 60
- * Low: salience < 40 (including 0)
+ * Primary Focus: salience >= 81
+ * Major Focus: salience >= 61
+ * Moderate Focus: salience >= 41
+ * Minor Focus: salience >= 11
+ * Low: salience >= 1
+ * Not available: salience < 1
  */
 function calculateSalienceDistribution(results) {
-  const counts = { high: 0, medium: 0, low: 0 };
+  // Initialize with safe defaults
+  const counts = { 
+    primary_focus: 0, 
+    major_focus: 0, 
+    moderate_focus: 0, 
+    minor_focus: 0, 
+    low: 0, 
+    not_mentions: 0 
+  };
+
+  // Handle null/undefined results
+  if (!results || !Array.isArray(results)) {
+    return {
+      primary_focus: { count: 0, percentage: 0 },
+      major_focus: { count: 0, percentage: 0 },
+      moderate_focus: { count: 0, percentage: 0 },
+      minor_focus: { count: 0, percentage: 0 },
+      low: { count: 0, percentage: 0 },
+      not_mentions: { count: 0, percentage: 0 }
+    };
+  }
 
   results.forEach((r) => {
-    if (r.salience != null && !isNaN(r.salience)) {
-      const score = Number(r.salience);
-      if (score >= 60) counts.high++;
-      else if (score >= 40) counts.medium++;
-      else counts.low++;
+    try {
+      if (r && r.salience != null && !isNaN(r.salience)) {
+        const score = Number(r.salience);
+        if (score >= 81) counts.primary_focus++;
+        else if (score >= 61) counts.major_focus++;
+        else if (score >= 41) counts.moderate_focus++;
+        else if (score >= 11) counts.minor_focus++;
+        else if (score >= 1) counts.low++;
+        else counts.not_mentions++;
+      } else {
+        counts.not_mentions++;
+      }
+    } catch (error) {
+      console.warn('Error processing salience data:', error);
+      counts.not_mentions++;
     }
   });
 
-  const total = counts.high + counts.medium + counts.low || 1;
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0) || 1;
 
   return {
-    high_salience: {
-      count: counts.high,
-      percentage: Math.round((counts.high / total) * 100),
+    primary_focus: {
+      count: counts.primary_focus,
+      percentage: Math.round((counts.primary_focus / total) * 100),
     },
-    medium_salience: {
-      count: counts.medium,
-      percentage: Math.round((counts.medium / total) * 100),
+    major_focus: {
+      count: counts.major_focus,
+      percentage: Math.round((counts.major_focus / total) * 100),
     },
-    low_salience: {
+    moderate_focus: {
+      count: counts.moderate_focus,
+      percentage: Math.round((counts.moderate_focus / total) * 100),
+    },
+    minor_focus: {
+      count: counts.minor_focus,
+      percentage: Math.round((counts.minor_focus / total) * 100),
+    },
+    low: {
       count: counts.low,
       percentage: Math.round((counts.low / total) * 100),
+    },
+    not_mentions: {
+      count: counts.not_mentions,
+      percentage: Math.round((counts.not_mentions / total) * 100),
     },
   };
 }
@@ -723,7 +861,10 @@ function calculateMostCitedPages(results) {
     }
   });
 
-  const total = results.length || 1;
+  // Calculate total citations for percentage calculation
+  const totalCitations = Array.from(urlCounts.values()).reduce((sum, count) => sum + count, 0);
+  const total = totalCitations || 1;
+  
   return Array.from(urlCounts.entries())
     .sort(([,a], [,b]) => b - a)
     .slice(0, 10) // Return top 10 most cited pages
@@ -775,7 +916,10 @@ function calculateMostCitedWebsites(results) {
     }
   });
 
-  const total = results.length || 1;
+  // Calculate total citations for percentage calculation
+  const totalCitations = Array.from(domainCounts.values()).reduce((sum, count) => sum + count, 0);
+  const total = totalCitations || 1;
+  
   return Array.from(domainCounts.entries())
     .sort(([,a], [,b]) => b - a)
     .slice(0, 10) // Return top 10 most cited websites
@@ -789,69 +933,26 @@ function calculateMostCitedWebsites(results) {
 /**
  * Generate AI Insights
  */
-function generateAIInsights(
-  kpiMetrics,
-  results,
-  sentimentDist,
-  salienceDist
-) {
-  const avgSentiment = kpiMetrics.avg_sentiment_score.value;
-  const volumeTrend = kpiMetrics.total_search_volume.trend;
-  const brandMentions = kpiMetrics.brand_mentions.value;
-  const domainMentions = kpiMetrics.domain_mentions.value;
-  const citationGap = brandMentions - domainMentions;
-
-  // Find top opportunity from results
-  let topOpportunity = "No data available yet.";
-  if (results.length > 0) {
-    const topResult = results
-      .filter(r => r.sentiment && r.ai_search_volume)
-      .sort((a, b) => (b.sentiment * Math.log(b.ai_search_volume + 1)) - (a.sentiment * Math.log(a.ai_search_volume + 1)))
-      [0];
-    
-    if (topResult) {
-      topOpportunity = `"${topResult.prompt || 'Unknown keyword'}" shows ${topResult.sentiment}% sentiment with ${topResult.ai_search_volume} volume. Consider creating comprehensive guides for this topic.`;
-    }
-  }
-
-  return {
-    strong_performance: {
-      title: "Strong Performance",
-      message: `Your sentiment score of ${avgSentiment} is ${
-        avgSentiment >= 60 ? "above" : avgSentiment >= 40 ? "at" : "below"
-      } industry average. ${salienceDist.high_salience.count > 0 ? "High salience mentions indicate strong brand authority." : "Focus on increasing brand salience in responses."}`,
-      type: avgSentiment >= 60 ? "success" : avgSentiment >= 40 ? "info" : "warning",
-    },
-    citation_gap: {
-      title: "Citation Gap",
-      message: citationGap > 0 
-        ? `${citationGap} brand mentions lack domain citations. Focus on content that establishes your site as the authoritative source.`
-        : "Great job! Your brand mentions are well-supported with domain citations.",
-      type: citationGap > 0 ? "warning" : "success",
-    },
-    top_opportunity: {
-      title: "Top Opportunity",
-      message: topOpportunity,
-      type: "info",
-    },
-    trend_alert: {
-      title: "Trend Alert",
-      message: `${Math.abs(volumeTrend)}% ${
-        volumeTrend >= 0 ? "increase" : "decrease"
-      } in search volume suggests ${
-        volumeTrend >= 0 ? "growing" : "declining"
-      } market interest.${volumeTrend < 0 ? " Monitor competitor mentions closely." : ""}`,
-      type: volumeTrend >= 0 ? "success" : "warning",
-    },
-  };
-}
+// generateAIInsights function removed - using frontend-generated fallback insights only
 
 /**
  * Get Top Performing Keywords (Top 5 by sentiment and volume)
  */
 function getTopPerformingKeywords(results, allPrompts, projectId) {
-  // Create a map of prompt_id to prompt data for quick lookup
-  const promptMap = new Map(allPrompts.map((p) => [p.id, p]));
+  try {
+    // Add safety checks
+    if (!results || !Array.isArray(results)) {
+      console.warn('Invalid results data for getTopPerformingKeywords');
+      return [];
+    }
+    
+    if (!allPrompts || !Array.isArray(allPrompts)) {
+      console.warn('Invalid allPrompts data for getTopPerformingKeywords');
+      return [];
+    }
+
+    // Create a map of prompt_id to prompt data for quick lookup
+    const promptMap = new Map(allPrompts.map((p) => [p.id, p]));
 
   // Filter results to only include those from the current project if projectId is specified
   const filteredResults = projectId 
@@ -963,6 +1064,10 @@ function getTopPerformingKeywords(results, allPrompts, projectId) {
       return (b.salience || 0) - (a.salience || 0);
     })
     .slice(0, 5); // Return top 5 keywords
+  } catch (error) {
+    console.warn('Error getting top performing keywords:', error);
+    return [];
+  }
 }
 
 /**
@@ -1032,14 +1137,20 @@ function getEmptyAnalytics(userId, days) {
       not_cited: { count: 0, percentage: 0 },
     },
     sentiment_distribution: {
+      very_positive: { count: 0, percentage: 0 },
       positive: { count: 0, percentage: 0 },
       neutral: { count: 0, percentage: 0 },
+      slightly_neutral: { count: 0, percentage: 0 },
       negative: { count: 0, percentage: 0 },
+      not_mentions: { count: 0, percentage: 0 },
     },
     salience_distribution: {
-      high_salience: { count: 0, percentage: 0 },
-      medium_salience: { count: 0, percentage: 0 },
-      low_salience: { count: 0, percentage: 0 },
+      primary_focus: { count: 0, percentage: 0 },
+      major_focus: { count: 0, percentage: 0 },
+      moderate_focus: { count: 0, percentage: 0 },
+      minor_focus: { count: 0, percentage: 0 },
+      low: { count: 0, percentage: 0 },
+      not_mentions: { count: 0, percentage: 0 },
     },
     serp_features: [],
     most_cited_pages: [],
