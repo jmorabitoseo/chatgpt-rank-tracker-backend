@@ -92,7 +92,6 @@ app.get("/", async (req, res) => {
 app.get("/snapshot-data/:snapshotId", async (req, res) => {
   const { snapshotId } = req.params;
   const { prompt } = req.query;
-
   if (!snapshotId || !prompt) {
     return res.status(400).json({
       error: "snapshotId (param) and prompt (query) are required",
@@ -123,7 +122,6 @@ app.get("/snapshot-data/:snapshotId", async (req, res) => {
       data: matchingResult,
     });
   } catch (err) {
-    // console.error('Snapshot data fetch error:', err);
 
     if (err.response?.status === 404) {
       return res.status(404).json({

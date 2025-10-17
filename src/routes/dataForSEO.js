@@ -11,6 +11,7 @@ const mgTransport = require("nodemailer-mailgun-transport");
 const { sanitizeText } = require("../utils/textSanitizer");
 const { retryWithBackoff } = require("../utils/apiHelpers");
 const { EnhancedAnalyzer } = require("../utils/EnhancedAnalyzer");
+
 const router = express.Router();
 const {
   cleanDomain,
@@ -18,6 +19,8 @@ const {
   cleanUrlKeepPath,
   formatCitationsForDB
 } = require('../utils/urlUtils');
+
+// ───────────── CONFIGURATION ─────────────
 
 // ───────────── SMTP via Mailgun transport ─────────────
 const transporter = nodemailer.createTransport(
@@ -28,6 +31,8 @@ const transporter = nodemailer.createTransport(
     },
   })
 );
+
+// ───────────── UTILITY FUNCTIONS ─────────────
 
 /**
  * Extract citations from DataForSEO response
@@ -85,10 +90,7 @@ function extractQueryParameters(req) {
 
     return { userId, openaiModel, isNightly, promptId, projectId };
   } catch (error) {
-    console.warn(
-      "[DataForSEO] Failed to parse query parameters:",
-      error.message
-    );
+    console.warn("[DataForSEO] Failed to parse query parameters:", error.message);
     return {
       userId: null,
       openaiModel: "gpt-4",
@@ -116,10 +118,7 @@ async function fetchUserOpenAIKey(userId) {
       .single();
 
     if (error) {
-      console.error(
-        `[DataForSEO] Error fetching user settings for user ${userId}:`,
-        error.message
-      );
+      console.error(`[DataForSEO] Error fetching user settings for user ${userId}:`, error.message);
       return null;
     }
 
@@ -130,10 +129,7 @@ async function fetchUserOpenAIKey(userId) {
 
     return userSettings.openai_key;
   } catch (error) {
-    console.error(
-      `[DataForSEO] Unexpected error fetching OpenAI key for user ${userId}:`,
-      error.message
-    );
+    console.error(`[DataForSEO] Unexpected error fetching OpenAI key for user ${userId}:`, error.message);
     return null;
   }
 }
@@ -174,10 +170,7 @@ function detectActualWebSearch(dataForSeoResponse) {
     const occurred = hasSources || hasSearchResults;
     return Boolean(occurred);
   } catch (error) {
-    console.warn(
-      "[DataForSEO] Failed to detect actual web search:",
-      error.message
-    );
+    console.warn("[DataForSEO] Failed to detect actual web search:", error.message);
     return false;
   }
 }
@@ -208,9 +201,7 @@ async function performSentimentAnalysis(
 ) {
   if (!shouldAnalyze || !openaiKey) {
     if (shouldAnalyze && !openaiKey) {
-      console.warn(
-        `[DataForSEO] Brand mentioned but no OpenAI key available for sentiment analysis (task: ${taskId})`
-      );
+      console.warn(`[DataForSEO] Brand mentioned but no OpenAI key available for sentiment analysis (task: ${taskId})`);
     }
     return { sentiment: 0, salience: 0 };
   }
@@ -234,10 +225,7 @@ async function performSentimentAnalysis(
       salience: analysisResult.salience,
     };
   } catch (error) {
-    console.error(
-      `[DataForSEO] Analysis failed for task ${taskId}:`,
-      error.message
-    );
+    console.error(`[DataForSEO] Analysis failed for task ${taskId}:`, error.message);
     return { sentiment: 0, salience: 0 };
   }
 }
@@ -255,13 +243,12 @@ async function fetchAIVolumeData(promptText, taskId) {
     }
     return null;
   } catch (error) {
-    console.warn(
-      `[DataForSEO] AI volume fetch failed for task ${taskId}:`,
-      error.message
-    );
+    console.warn(`[DataForSEO] AI volume fetch failed for task ${taskId}:`, error.message);
     return null;
   }
 }
+
+// ───────────── JOB BATCH MANAGEMENT ─────────────
 
 /**
  * Handle job batch progress and completion for regular (non-nightly) jobs
@@ -316,10 +303,7 @@ async function handleJobBatchProgress(trackingResult) {
       }
     }
   } catch (error) {
-    console.error(
-      "[DataForSEO] Error updating job batch progress:",
-      error.message
-    );
+    console.error("[DataForSEO] Error updating job batch progress:", error.message);
   }
 }
 
@@ -371,10 +355,7 @@ async function handleFailedJobBatch(trackingResult, task) {
       }
     }
   } catch (error) {
-    console.error(
-      "[DataForSEO] Error updating job batch failure:",
-      error.message
-    );
+    console.error("[DataForSEO] Error updating job batch failure:", error.message);
   }
 }
 
@@ -403,12 +384,84 @@ async function sendCompletionEmail(email, trackingResult) {
       "h:X-Mailgun-Variables": JSON.stringify(templateVars),
     });
   } catch (error) {
-    console.error(
-      "[DataForSEO] Error sending completion email:",
-      error.message
-    );
+    console.error("[DataForSEO] Error sending completion email:", error.message);
   }
 }
+
+// ───────────── ERROR HANDLING ─────────────
+
+/**
+ * Handle error by updating tracking result to failed state
+ * Only for regular (non-nightly) jobs since nightly jobs don't have existing tracking results
+ */
+async function handleTrackingResultError(error, trackingResult) {
+  if (!trackingResult) {
+    console.warn("[DataForSEO] Cannot handle error: missing trackingResult");
+    return;
+  }
+
+  try {
+    const errorResponse = {
+      error: error.message || "Unknown error occurred during processing"
+    };
+
+    const updateData = {
+      status: "failed",
+      response: JSON.stringify(errorResponse),
+      timestamp: Date.now(),
+    };
+
+    const { error: updateError } = await supabase
+      .from("tracking_results")
+      .update(updateData)
+      .eq("id", trackingResult.id);
+
+    if (updateError) {
+      console.error(`[DataForSEO] Error updating tracking result ${trackingResult.id} to failed state:`, updateError.message);
+    }
+  } catch (handleError) {
+    console.error(`[DataForSEO] Error in handleTrackingResultError for tracking result ${trackingResult.id}:`, handleError.message);
+  }
+}
+
+/**
+ * Handle database update errors by forcing tracking result to failed state
+ * This is a critical fallback to prevent tracking results from staying in processing state
+ */
+async function handleDatabaseUpdateError(updateError, trackingResult) {
+  if (!trackingResult) {
+    console.warn("[DataForSEO] Cannot handle database update error: missing trackingResult");
+    return;
+  }
+
+  try {
+    const errorResponse = {
+      error: `Database update failed: ${updateError.message || "Unknown database error"}`
+    };
+
+    const fallbackUpdateData = {
+      status: "failed",
+      response: JSON.stringify(errorResponse),
+      timestamp: Date.now(),
+    };
+
+    // Force update with minimal data to ensure status is set to failed
+    const { error: fallbackError } = await supabase
+      .from("tracking_results")
+      .update(fallbackUpdateData)
+      .eq("id", trackingResult.id);
+
+    if (fallbackError) {
+      console.error(`[DataForSEO] CRITICAL: Failed to update tracking result ${trackingResult.id} to failed state even with fallback:`, fallbackError.message);
+      // At this point, we've exhausted all options to update the record
+      // The tracking result may remain in processing state, but we've logged the issue
+    }
+  } catch (criticalError) {
+    console.error(`[DataForSEO] CRITICAL: Error in handleDatabaseUpdateError for tracking result ${trackingResult.id}:`, criticalError.message);
+  }
+}
+
+// ───────────── NIGHTLY JOB MANAGEMENT ─────────────
 
 /**
  * Create new tracking result for nightly jobs
@@ -473,78 +526,26 @@ async function createNightlyTrackingResult(
       .insert([insertData]);
 
     if (insertErr) {
-      console.error(
-        `[DataForSEO] Error creating nightly tracking result for task ${taskId}:`,
-        insertErr.message
-      );
+      console.error(`[DataForSEO] Error creating nightly tracking result for task ${taskId}:`, insertErr.message);
+      console.error(`[DataForSEO] CRITICAL: Failed to create nightly tracking result for task ${taskId}. This may result in lost data.`);
       throw insertErr;
     }
     return insertData;
   } catch (error) {
-    console.error(
-      `[DataForSEO] Failed to create nightly tracking result for task ${taskId}:`,
-      error.message
-    );
+    console.error(`[DataForSEO] Failed to create nightly tracking result for task ${taskId}:`, error.message);
     throw error;
   }
 }
 
-/**
- * Create failed tracking result for nightly jobs
- */
-async function createFailedNightlyTrackingResult(
-  promptData,
-  taskId,
-  userId,
-  task
-) {
-  try {
-    const insertData = {
-      prompt_id: promptData.promptId,
-      prompt: promptData.prompt,
-      project_id: promptData.projectId,
-      user_id: userId,
-      snapshot_id: taskId,
-      status: "failed",
-      timestamp: Date.now(),
-      is_present: false,
-      sentiment: 0,
-      salience: 0,
-      response: JSON.stringify({
-        error: task.status_message || "DataForSEO task failed",
-        task_status: task.status_code,
-        raw_response: task,
-      }),
-      brand_mentions: promptData.brandMentions,
-      domain_mentions: promptData.domainMentions,
-      brand_name: String(promptData.brandMentions),
-      source: "DataForSEO (Nightly)",
-      mention_count: 0,
-      domain_mention_count: 0,
-    };
 
-    const { error: insertErr } = await supabase
-      .from("tracking_results")
-      .insert([insertData]);
-
-    if (insertErr) {
-      console.error(
-        `[DataForSEO] Error creating failed nightly tracking result for task ${taskId}:`,
-        insertErr.message
-      );
-      throw insertErr;
-    }
-    return insertData;
-  } catch (error) {
-    console.error(
-      `[DataForSEO] Failed to create failed nightly tracking result for task ${taskId}:`,
-      error.message
-    );
-    throw error;
-  }
-}
+// ───────────── MAIN CALLBACK ROUTE ─────────────
 
 router.post("/callback", async (req, res) => {
+  let taskId = null;
+  let isNightly = false;
+  let trackingResult = null;
+  let promptData = null;
+
   try {
     const dataForSeoResponse = req.body;
     // Validate callback data
@@ -554,29 +555,23 @@ router.post("/callback", async (req, res) => {
     }
 
     const task = dataForSeoResponse.tasks[0];
-    const taskId = task.id;
+    taskId = task.id;
     const status = task.status_code;
 
     // Extract parameters
-    const { userId, openaiModel, isNightly, promptId, projectId } =
+    const { userId, openaiModel, isNightly: isNightlyParam, promptId, projectId } =
       extractQueryParameters(req);
+    isNightly = isNightlyParam;
     const openaiKey = await fetchUserOpenAIKey(userId);
     const userCountry = extractUserCountry(task);
     const actualWebSearchOccurred = detectActualWebSearch(dataForSeoResponse);
 
     // For nightly jobs, we need to get prompt data differently since there's no existing tracking_result
-    let trackingResult = null;
-    let promptData = null;
-
     if (isNightly) {
       // For nightly jobs, get prompt data from the prompts table
       if (!promptId) {
-        console.error(
-          `[DataForSEO] Nightly job missing promptId for task ${taskId}`
-        );
-        return res
-          .status(400)
-          .json({ error: "Missing promptId for nightly job" });
+        console.error(`[DataForSEO] Nightly job missing promptId for task ${taskId}`);
+        return res.status(400).json({ error: "Missing promptId for nightly job" });
       }
 
       const { data: prompt, error: promptError } = await supabase
@@ -586,13 +581,8 @@ router.post("/callback", async (req, res) => {
         .single();
 
       if (promptError || !prompt) {
-        console.error(
-          `[DataForSEO] Error fetching prompt ${promptId} for nightly job:`,
-          promptError?.message
-        );
-        return res
-          .status(404)
-          .json({ error: "Prompt not found for nightly job" });
+        console.error(`[DataForSEO] Error fetching prompt ${promptId} for nightly job:`, promptError?.message);
+        return res.status(404).json({ error: "Prompt not found for nightly job" });
       }
 
       promptData = {
@@ -610,17 +600,12 @@ router.post("/callback", async (req, res) => {
         .eq("snapshot_id", taskId);
 
       if (findError) {
-        console.error(
-          "[DataForSEO] Error finding tracking result:",
-          findError.message
-        );
+        console.error("[DataForSEO] Error finding tracking result:", findError.message);
         return res.status(500).json({ error: "Database error" });
       }
 
       if (!trackingResults?.length) {
-        console.warn(
-          `[DataForSEO] No tracking result found for task ${taskId}`
-        );
+        console.warn(`[DataForSEO] No tracking result found for task ${taskId}`);
         return res.status(404).json({ error: "Tracking result not found" });
       }
 
@@ -629,42 +614,43 @@ router.post("/callback", async (req, res) => {
 
     // Handle successful completion
     if (status === 20000 && task.result?.length > 0) {
-      const result = task.result[0];
-      const answerText = sanitizeText(result.markdown || "");
-      const citations = extractCitations(dataForSeoResponse);
+      try {
+        const result = task.result[0];
+        const answerText = sanitizeText(result.markdown || "");
+        const citations = extractCitations(dataForSeoResponse);
 
-      // Get brand mentions from appropriate source
-      const brandMentions = normalizeBrandMentions(
-        isNightly ? promptData.brandMentions : trackingResult.brand_mentions
-      );
+        // Get brand mentions from appropriate source
+        const brandMentions = normalizeBrandMentions(
+          isNightly ? promptData.brandMentions : trackingResult.brand_mentions
+        );
 
-      // Get domain mentions from appropriate source
-      const domainMentions = isNightly
-        ? promptData.domainMentions
-        : trackingResult.domain_mentions;
+        // Get domain mentions from appropriate source
+        const domainMentions = isNightly
+          ? promptData.domainMentions
+          : trackingResult.domain_mentions;
 
-      // Count matches
-      const match = countBrandMatches(brandMentions, answerText);
-      const domainMatch = countDomainMatches(domainMentions, citations);
+        // Count matches
+        const match = countBrandMatches(brandMentions, answerText);
+        const domainMatch = countDomainMatches(domainMentions, citations);
 
-      // Perform sentiment analysis
-      const { sentiment, salience } = await performSentimentAnalysis(
-        match.anyMatch,
-        openaiKey,
-        answerText,
-        brandMentions,
-        openaiModel,
-        taskId
-      );
-      const serpAnalyzer = new EnhancedAnalyzer();
-      const analyzerResult = serpAnalyzer.analyzeResponse(dataForSeoResponse);
+        // Perform sentiment analysis
+        const { sentiment, salience } = await performSentimentAnalysis(
+          match.anyMatch,
+          openaiKey,
+          answerText,
+          brandMentions,
+          openaiModel,
+          taskId
+        );
+        const serpAnalyzer = new EnhancedAnalyzer();
+        const analyzerResult = serpAnalyzer.analyzeResponse(dataForSeoResponse);
 
-      // Pull out the summary
-      const { summary } = analyzerResult;
+        // Pull out the summary
+        const { summary } = analyzerResult;
 
-      // Fetch AI volume data
-      const promptText = isNightly ? promptData.prompt : trackingResult.prompt;
-      const aiVolumeData = await fetchAIVolumeData(promptText, taskId);
+        // Fetch AI volume data
+        const promptText = isNightly ? promptData.prompt : trackingResult.prompt;
+        const aiVolumeData = await fetchAIVolumeData(promptText, taskId);
 
       if (isNightly) {
         // Create new tracking result for nightly job
@@ -726,41 +712,52 @@ router.post("/callback", async (req, res) => {
           .eq("id", trackingResult.id);
 
         if (updateError) {
-          console.error(
-            `[DataForSEO] Error updating tracking result ${trackingResult.id}:`,
-            updateError.message
-          );
-          return res
-            .status(500)
-            .json({ error: "Failed to update tracking result" });
+          console.error(`[DataForSEO] Error updating tracking result ${trackingResult.id}:`, updateError.message);
+          
+          // Critical: Update tracking result to failed state even if database update fails
+          await handleDatabaseUpdateError(updateError, trackingResult);
+          
+          return res.status(500).json({ error: "Failed to update tracking result" });
         }
         // Handle job batch progress (only for regular jobs)
         await handleJobBatchProgress(trackingResult);
       }
-    } else {
-      // Handle processing or failure states
-      if (typeof status === "number" && status < 40000) {
-        // Still processing
-        return res.status(202).json({
-          status: "processing",
-          message: `Task ${taskId} is still processing`,
-          task_status: status,
+      } catch (processingError) {
+        console.error(`[DataForSEO] Error processing successful task ${taskId}:`, processingError.message);
+        
+        // Handle error by updating tracking result to failed state
+        // Only for regular (non-nightly) jobs since nightly jobs don't have existing tracking results
+        if (!isNightly && trackingResult) {
+          await handleTrackingResultError(processingError, trackingResult);
+        }
+        
+        return res.status(500).json({
+          error: "Error processing task result",
+          message: processingError.message,
         });
       }
-
-      // Terminal failure
-      console.error(`[DataForSEO] Task ${taskId} failed with status ${status}`);
+    } else {
+      // Handle all non-success cases (status !== 20000 or no results)
+      // CRITICAL: Any error condition must update status to "failed"
+      
+      let errorMessage = "";
+      
+      if (status === 20000 && (!task.result || task.result.length === 0)) {
+        errorMessage = "Task completed successfully but no results returned";
+        console.error(`[DataForSEO] Task ${taskId} completed successfully but no results returned`);
+      } else if (typeof status === "number" && status < 40000 && status !== 20000) {
+        errorMessage = `Task ${taskId} failed during processing with status ${status}`;
+        console.error(`[DataForSEO] Task ${taskId} failed during processing with status ${status}`);
+      } else {
+        errorMessage = task.status_message || `DataForSEO task failed with status ${status}`;
+        console.error(`[DataForSEO] Task ${taskId} failed with status ${status}`);
+      }
 
       if (isNightly) {
-        // Create failed tracking result for nightly job
-        await createFailedNightlyTrackingResult(
-          promptData,
-          taskId,
-          userId,
-          task
-        );
+        // For nightly jobs, do not create any tracking result on failure
+        console.log(`[DataForSEO] Nightly job ${taskId} failed - no tracking result created`);
       } else {
-        // Handle regular job failure
+        // Handle regular job failure - update existing tracking result
         // Check current status to avoid downgrading fulfilled records
         const { data: current, error: currentErr } = await supabase
           .from("tracking_results")
@@ -769,16 +766,14 @@ router.post("/callback", async (req, res) => {
           .single();
 
         if (!currentErr && current?.status === "fulfilled") {
-          console.warn(
-            `[DataForSEO] Received failure for already fulfilled tracking ${trackingResult.id}. Ignoring.`
-          );
+          console.warn(`[DataForSEO] Received failure for already fulfilled tracking ${trackingResult.id}. Ignoring.`);
           return res.status(200).json({
             status: "success",
             message: `Task ${taskId} already fulfilled; ignoring late failure`,
           });
         }
 
-        // Update as failed
+        // Update as failed - CRITICAL: Always update status to failed for any error
         const updateData = {
           status: "failed",
           timestamp: Date.now(),
@@ -786,7 +781,7 @@ router.post("/callback", async (req, res) => {
           sentiment: 0,
           salience: 0,
           response: JSON.stringify({
-            error: task.status_message || "DataForSEO task failed",
+            error: errorMessage,
             task_status: status,
             raw_response: task,
           }),
@@ -801,18 +796,23 @@ router.post("/callback", async (req, res) => {
           .eq("id", trackingResult.id);
 
         if (updateError) {
-          console.error(
-            `[DataForSEO] Error updating failed tracking result ${trackingResult.id}:`,
-            updateError.message
-          );
-          return res
-            .status(500)
-            .json({ error: "Failed to update tracking result" });
+          console.error(`[DataForSEO] Error updating failed tracking result ${trackingResult.id}:`, updateError.message);
+          
+          // Critical: Update tracking result to failed state even if database update fails
+          await handleDatabaseUpdateError(updateError, trackingResult);
+          
+          return res.status(500).json({ error: "Failed to update tracking result" });
         }
 
         // Handle failed job batch (only for regular jobs)
         await handleFailedJobBatch(trackingResult, task);
       }
+
+      return res.status(200).json({
+        status: "success",
+        message: `Task ${taskId} processed with error: ${errorMessage}`,
+        task_status: status,
+      });
     }
 
     // Return success response
@@ -826,6 +826,13 @@ router.post("/callback", async (req, res) => {
     });
   } catch (error) {
     console.error("[DataForSEO] Unexpected error:", error.message);
+    
+    // Handle error by updating tracking result to failed state
+    // Only for regular (non-nightly) jobs since nightly jobs don't have existing tracking results
+    if (!isNightly && trackingResult) {
+      await handleTrackingResultError(error, trackingResult);
+    }
+    
     res.status(500).json({
       error: "Internal server error",
       message: error.message,
